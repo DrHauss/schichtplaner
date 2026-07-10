@@ -1,0 +1,1 @@
+{"root":["./src/App.tsx","./src/main.tsx","./src/api/client.ts","./src/auth/AuthContext.tsx","./src/components/Layout.tsx","./src/pages/AusschreibungDetailPage.tsx","./src/pages/LoginPage.tsx","./src/pages/MeinPlanPage.tsx","./src/pages/PlantafelPage.tsx","./src/pages/SchichtboersePage.tsx","./src/pages/StammdatenPage.tsx"],"version":"5.9.3"}
