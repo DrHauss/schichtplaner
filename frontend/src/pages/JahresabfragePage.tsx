@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { Fragment, FormEvent, useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
@@ -166,6 +166,12 @@ function GeneratorTab({ ausschreibungId, peId, onErzeugt }: { ausschreibungId: n
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const [offeneUebersichtSid, setOffeneUebersichtSid] = useState<number | null>(null);
+  const [uebersicht, setUebersicht] = useState<{
+    standard: number | null;
+    teilnehmer: { teilnehmerId: number; name: string; override: number | null }[];
+  } | null>(null);
+
   function ladeSerien() {
     api<Terminserie[]>(`/ausschreibungen/${ausschreibungId}/terminserien`).then(setSerien);
   }
@@ -244,6 +250,27 @@ function GeneratorTab({ ausschreibungId, peId, onErzeugt }: { ausschreibungId: n
       body: JSON.stringify({ mindestZusagen: wert === "" ? null : wert }),
     });
     ladeSerien();
+    onErzeugt();
+  }
+
+  async function uebersichtOeffnen(sid: number) {
+    if (offeneUebersichtSid === sid) {
+      setOffeneUebersichtSid(null);
+      setUebersicht(null);
+      return;
+    }
+    const res = await api<typeof uebersicht>(`/ausschreibungen/${ausschreibungId}/terminserien/${sid}/mindestzusagen`);
+    setUebersicht(res);
+    setOffeneUebersichtSid(sid);
+  }
+
+  async function overrideAendern(sid: number, teilnehmerId: number, wert: number | "") {
+    await api(`/ausschreibungen/${ausschreibungId}/terminserien/${sid}/mindestzusagen/${teilnehmerId}`, {
+      method: "PUT",
+      body: JSON.stringify({ mindestZusagen: wert === "" ? null : wert }),
+    });
+    const res = await api<typeof uebersicht>(`/ausschreibungen/${ausschreibungId}/terminserien/${sid}/mindestzusagen`);
+    setUebersicht(res);
     onErzeugt();
   }
 
@@ -355,7 +382,8 @@ function GeneratorTab({ ausschreibungId, peId, onErzeugt }: { ausschreibungId: n
         <p className="hint">
           Die Mindestanzahl gilt je Serie, nicht für die ganze Jahresabfrage -- z. B. „mind. 3" für Wochenende Frühschicht und
           getrennt davon „mind. 2" für Nachtschicht-4er-Blöcke. Erst wenn alle so konfigurierten Serien erfüllt sind, gilt die
-          Rückmeldung eines Teilnehmers als vollständig.
+          Rückmeldung eines Teilnehmers als vollständig. Über „Je Mitarbeiter" lässt sich die Mindestanzahl einer Serie
+          zusätzlich für einzelne Personen abweichend festlegen (z. B. weniger Nachtschichten für Teilzeitkräfte).
         </p>
         {error && <div className="error">{error}</div>}
       </form>
@@ -372,25 +400,68 @@ function GeneratorTab({ ausschreibungId, peId, onErzeugt }: { ausschreibungId: n
         </thead>
         <tbody>
           {serien.map((s) => (
-            <tr key={s.id}>
-              <td>{s.bezeichnung}</td>
-              <td>{s.anzahlBloecke}</td>
-              <td>
-                <input
-                  type="number"
-                  min={0}
-                  defaultValue={s.mindest_zusagen ?? ""}
-                  placeholder="keine"
-                  onBlur={(e) => {
-                    const wert = e.target.value ? Number(e.target.value) : "";
-                    if (wert !== (s.mindest_zusagen ?? "")) mindestZusagenAendern(s.id, wert);
-                  }}
-                />
-              </td>
-              <td>
-                <button onClick={() => loeschen(s.id)}>Löschen</button>
-              </td>
-            </tr>
+            <Fragment key={s.id}>
+              <tr>
+                <td>{s.bezeichnung}</td>
+                <td>{s.anzahlBloecke}</td>
+                <td>
+                  <input
+                    type="number"
+                    min={0}
+                    defaultValue={s.mindest_zusagen ?? ""}
+                    placeholder="keine"
+                    onBlur={(e) => {
+                      const wert = e.target.value ? Number(e.target.value) : "";
+                      if (wert !== (s.mindest_zusagen ?? "")) mindestZusagenAendern(s.id, wert);
+                    }}
+                  />
+                </td>
+                <td>
+                  <button onClick={() => uebersichtOeffnen(s.id)}>Je Mitarbeiter</button>
+                  <button onClick={() => loeschen(s.id)}>Löschen</button>
+                </td>
+              </tr>
+              {offeneUebersichtSid === s.id && uebersicht && (
+                <tr key={`${s.id}-uebersicht`}>
+                  <td colSpan={4}>
+                    <table className="table">
+                      <thead>
+                        <tr>
+                          <th>Name</th>
+                          <th>Mindestanzahl (Standard: {uebersicht.standard ?? "keine"})</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {uebersicht.teilnehmer.map((t) => (
+                          <tr key={t.teilnehmerId}>
+                            <td>{t.name}</td>
+                            <td>
+                              <input
+                                type="number"
+                                min={0}
+                                defaultValue={t.override ?? ""}
+                                placeholder={uebersicht.standard != null ? String(uebersicht.standard) : "keine"}
+                                onBlur={(e) => {
+                                  const wert = e.target.value ? Number(e.target.value) : "";
+                                  if (wert !== (t.override ?? "")) overrideAendern(s.id, t.teilnehmerId, wert);
+                                }}
+                              />
+                            </td>
+                          </tr>
+                        ))}
+                        {uebersicht.teilnehmer.length === 0 && (
+                          <tr>
+                            <td colSpan={2} className="empty">
+                              Noch keine Teilnehmer.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </td>
+                </tr>
+              )}
+            </Fragment>
           ))}
           {serien.length === 0 && (
             <tr>

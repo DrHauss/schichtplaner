@@ -144,6 +144,45 @@ jahresabfrageRouter.delete("/ausschreibungen/:id/terminserien/:sid", (req: Authe
   res.json({ ok: true });
 });
 
+// Individuelle Mindestanzahl je Teilnehmer fuer eine Terminserie -- weicht vom Standard der
+// Serie ab (z. B. weniger Nachtschichten fuer Teilzeitkraefte).
+jahresabfrageRouter.get("/ausschreibungen/:id/terminserien/:sid/mindestzusagen", (req: AuthedRequest, res) => {
+  if (!requirePlanerFuerAusschreibung(req, res, req.params.id)) return;
+  const serie = db.prepare("SELECT * FROM terminserie WHERE id = ? AND ausschreibung_id = ?").get(req.params.sid, req.params.id) as
+    | { mindest_zusagen: number | null }
+    | undefined;
+  if (!serie) return res.status(404).json({ error: "Terminserie nicht gefunden" });
+  const teilnehmer = db.prepare("SELECT id, name FROM abfrage_teilnehmer WHERE ausschreibung_id = ? ORDER BY name").all(req.params.id) as {
+    id: number;
+    name: string;
+  }[];
+  const overrides = db
+    .prepare("SELECT teilnehmer_id, mindest_zusagen FROM terminserie_mindestzusagen WHERE terminserie_id = ?")
+    .all(req.params.sid) as { teilnehmer_id: number; mindest_zusagen: number }[];
+  const overrideMap = new Map(overrides.map((o) => [o.teilnehmer_id, o.mindest_zusagen]));
+  res.json({
+    standard: serie.mindest_zusagen,
+    teilnehmer: teilnehmer.map((t) => ({ teilnehmerId: t.id, name: t.name, override: overrideMap.get(t.id) ?? null })),
+  });
+});
+
+jahresabfrageRouter.put("/ausschreibungen/:id/terminserien/:sid/mindestzusagen/:teilnehmerId", (req: AuthedRequest, res) => {
+  if (!requirePlanerFuerAusschreibung(req, res, req.params.id)) return;
+  const { mindestZusagen } = req.body ?? {};
+  if (mindestZusagen === "" || mindestZusagen === null || mindestZusagen === undefined) {
+    db.prepare("DELETE FROM terminserie_mindestzusagen WHERE terminserie_id = ? AND teilnehmer_id = ?").run(
+      req.params.sid,
+      req.params.teilnehmerId
+    );
+  } else {
+    db.prepare(
+      `INSERT INTO terminserie_mindestzusagen (terminserie_id, teilnehmer_id, mindest_zusagen) VALUES (?,?,?)
+       ON CONFLICT(terminserie_id, teilnehmer_id) DO UPDATE SET mindest_zusagen = excluded.mindest_zusagen`
+    ).run(req.params.sid, req.params.teilnehmerId, mindestZusagen);
+  }
+  res.json({ ok: true });
+});
+
 // --- Rasteransicht ---
 
 jahresabfrageRouter.get("/ausschreibungen/:id/raster", (req: AuthedRequest, res) => {
@@ -220,7 +259,7 @@ jahresabfrageRouter.get("/ausschreibungen/:id/fortschritt", (req: AuthedRequest,
     .prepare("SELECT id, name, benutzer_id, abgegeben_am FROM abfrage_teilnehmer WHERE ausschreibung_id = ?")
     .all(req.params.id) as any[];
   const mitStatus = teilnehmer.map((t) => {
-    const vorgaben = t.benutzer_id ? ladeVorgabenStatus(req.params.id, t.benutzer_id) : [];
+    const vorgaben = t.benutzer_id ? ladeVorgabenStatus(req.params.id, t.id, t.benutzer_id) : [];
     return {
       id: t.id,
       name: t.name,

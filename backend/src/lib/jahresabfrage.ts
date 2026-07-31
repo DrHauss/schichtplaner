@@ -35,12 +35,21 @@ export interface RasterZeile {
 
 // Mindestanzahl gilt je Terminserie, nicht pauschal fuer die ganze Jahresabfrage -- z. B.
 // "mind. 3 Wochenende Fruehschicht" und getrennt davon "mind. 2 Nachtschicht-4er-Bloecke".
-// Eine Serie ohne konfigurierte Mindestanzahl erzeugt keine Vorgabe.
-export function ladeVorgabenStatus(ausschreibungId: number | string, benutzerId: number): Vorgabe[] {
+// Innerhalb einer Serie kann die Mindestanzahl zusaetzlich je Teilnehmer individuell
+// abweichen (terminserie_mindestzusagen, z. B. weniger Nachtschichten fuer Teilzeitkraefte);
+// ohne individuellen Eintrag gilt der Standard der Serie. Eine Serie ohne Standard und ohne
+// individuelle Vorgabe fuer diesen Teilnehmer erzeugt keine Vorgabe.
+export function ladeVorgabenStatus(ausschreibungId: number | string, teilnehmerId: number, benutzerId: number): Vorgabe[] {
   const serien = db
-    .prepare("SELECT id, bezeichnung, mindest_zusagen FROM terminserie WHERE ausschreibung_id = ? AND mindest_zusagen IS NOT NULL")
-    .all(ausschreibungId) as { id: number; bezeichnung: string; mindest_zusagen: number }[];
+    .prepare(
+      `SELECT t.id, t.bezeichnung, t.mindest_zusagen as standard, tm.mindest_zusagen as override
+       FROM terminserie t
+       LEFT JOIN terminserie_mindestzusagen tm ON tm.terminserie_id = t.id AND tm.teilnehmer_id = ?
+       WHERE t.ausschreibung_id = ? AND (t.mindest_zusagen IS NOT NULL OR tm.mindest_zusagen IS NOT NULL)`
+    )
+    .all(teilnehmerId, ausschreibungId) as { id: number; bezeichnung: string; standard: number | null; override: number | null }[];
   return serien.map((s) => {
+    const mindestZusagen = s.override ?? (s.standard as number);
     const zusagenAnzahl = (
       db
         .prepare(
@@ -52,9 +61,9 @@ export function ladeVorgabenStatus(ausschreibungId: number | string, benutzerId:
     return {
       terminserieId: s.id,
       bezeichnung: s.bezeichnung,
-      mindestZusagen: s.mindest_zusagen,
+      mindestZusagen,
       zusagenAnzahl,
-      erfuellt: zusagenAnzahl >= s.mindest_zusagen,
+      erfuellt: zusagenAnzahl >= mindestZusagen,
     };
   });
 }
@@ -127,7 +136,7 @@ export function baueRaster(
         zellen[b.id] = { antwort: bw?.antwort ?? "", gesperrt, grund };
       }
     }
-    const vorgaben = t.benutzer_id ? ladeVorgabenStatus(ausschreibungId, t.benutzer_id) : [];
+    const vorgaben = t.benutzer_id ? ladeVorgabenStatus(ausschreibungId, t.id, t.benutzer_id) : [];
     return {
       teilnehmerId: t.id,
       benutzerId: t.benutzer_id,
