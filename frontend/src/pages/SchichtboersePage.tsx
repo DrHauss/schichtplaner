@@ -31,7 +31,6 @@ export default function SchichtboersePage() {
   const [jaVon, setJaVon] = useState("");
   const [jaBis, setJaBis] = useState("");
   const [jaFrist, setJaFrist] = useState("");
-  const [jaMindestZusagen, setJaMindestZusagen] = useState<number | "">("");
   const [jaBusy, setJaBusy] = useState(false);
   const [jaError, setJaError] = useState<string | null>(null);
 
@@ -78,14 +77,12 @@ export default function SchichtboersePage() {
           zeitraumVon: jaVon,
           zeitraumBis: jaBis,
           bewerbungsfrist: jaFrist,
-          mindestZusagen: jaMindestZusagen || undefined,
         }),
       });
       setJaTitel("");
       setJaVon("");
       setJaBis("");
       setJaFrist("");
-      setJaMindestZusagen("");
       load(peId);
       navigate(`/schichtboerse/jahresabfrage/${res.id}`);
     } catch (err) {
@@ -156,21 +153,12 @@ export default function SchichtboersePage() {
             Bewerbungsfrist
             <input type="datetime-local" value={jaFrist} onChange={(e) => setJaFrist(e.target.value)} required />
           </label>
-          <label>
-            Mindestanzahl Zusagen je Teilnehmer
-            <input
-              type="number"
-              min={0}
-              value={jaMindestZusagen}
-              onChange={(e) => setJaMindestZusagen(e.target.value ? Number(e.target.value) : "")}
-              placeholder="optional"
-            />
-          </label>
           <button type="submit" disabled={jaBusy}>
             Anlegen
           </button>
           <p className="hint">
-            Solange ein Teilnehmer nicht mindestens so viele Termine mit „Ja" beantwortet hat, gilt seine Rückmeldung als unvollständig.
+            Mindestanzahl Zusagen werden je Terminserie im Termingenerator der Abfrage festgelegt (z. B. getrennt für
+            Wochenende Frühschicht und Nachtschicht-Blöcke).
           </p>
           {jaError && <div className="error">{jaError}</div>}
         </form>

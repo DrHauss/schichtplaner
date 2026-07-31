@@ -13,33 +13,57 @@ export interface RasterSpalte {
   schichten: { datum: string; kuerzel: string; beginn: string; ende: string }[];
 }
 
+export interface Vorgabe {
+  terminserieId: number;
+  bezeichnung: string;
+  mindestZusagen: number;
+  zusagenAnzahl: number;
+  erfuellt: boolean;
+}
+
 export interface RasterZeile {
   teilnehmerId: number;
   benutzerId: number | null;
   name: string;
   wunschAnzahl: number | null;
   abgegebenAm: string | null;
-  zusagenAnzahl: number;
+  vorgaben: Vorgabe[];
   vollstaendig: boolean;
   versteckt: boolean;
   zellen: Record<number, { antwort: string; gesperrt: boolean; grund?: string }>;
 }
 
-// Anzahl "Ja"-Antworten eines Teilnehmers in dieser Jahresabfrage. Solange sie unter der
-// konfigurierten Mindestanzahl (ausschreibung.min_bloecke) liegt, gilt die Rueckmeldung als
-// unvollstaendig -- unabhaengig davon, ob bereits (mit "Nein"/"Wenn noetig") geantwortet wurde.
-export function zaehleZusagen(ausschreibungId: number | string, benutzerId: number): number {
-  const row = db
-    .prepare(
-      `SELECT COUNT(*) c FROM bewerbung bw JOIN schichtblock sb ON sb.id = bw.schichtblock_id
-       WHERE bw.benutzer_id = ? AND sb.ausschreibung_id = ? AND bw.antwort = 'ja'`
-    )
-    .get(benutzerId, ausschreibungId) as { c: number };
-  return row.c;
+// Mindestanzahl gilt je Terminserie, nicht pauschal fuer die ganze Jahresabfrage -- z. B.
+// "mind. 3 Wochenende Fruehschicht" und getrennt davon "mind. 2 Nachtschicht-4er-Bloecke".
+// Eine Serie ohne konfigurierte Mindestanzahl erzeugt keine Vorgabe.
+export function ladeVorgabenStatus(ausschreibungId: number | string, benutzerId: number): Vorgabe[] {
+  const serien = db
+    .prepare("SELECT id, bezeichnung, mindest_zusagen FROM terminserie WHERE ausschreibung_id = ? AND mindest_zusagen IS NOT NULL")
+    .all(ausschreibungId) as { id: number; bezeichnung: string; mindest_zusagen: number }[];
+  return serien.map((s) => {
+    const zusagenAnzahl = (
+      db
+        .prepare(
+          `SELECT COUNT(*) c FROM bewerbung bw JOIN schichtblock sb ON sb.id = bw.schichtblock_id
+           WHERE bw.benutzer_id = ? AND bw.antwort = 'ja' AND sb.terminserie_id = ?`
+        )
+        .get(benutzerId, s.id) as { c: number }
+    ).c;
+    return {
+      terminserieId: s.id,
+      bezeichnung: s.bezeichnung,
+      mindestZusagen: s.mindest_zusagen,
+      zusagenAnzahl,
+      erfuellt: zusagenAnzahl >= s.mindest_zusagen,
+    };
+  });
 }
 
-export function istVollstaendig(zusagenAnzahl: number, minBloecke: number | null): boolean {
-  return !minBloecke || zusagenAnzahl >= minBloecke;
+// Ohne konfigurierte Vorgaben gilt die alte, einfache Regel: irgendeine Antwort genuegt.
+// Sobald mind. eine Vorgabe existiert, muessen alle erfuellt sein.
+export function istVollstaendig(vorgaben: Vorgabe[], abgegebenAm: string | null): boolean {
+  if (vorgaben.length === 0) return !!abgegebenAm;
+  return vorgaben.every((v) => v.erfuellt);
 }
 
 // Baut die Rasteransicht (Konzept Kap. 3.2) fuer eine Jahresabfrage. requesterBenutzerId/istPlaner
@@ -103,15 +127,15 @@ export function baueRaster(
         zellen[b.id] = { antwort: bw?.antwort ?? "", gesperrt, grund };
       }
     }
-    const zusagenAnzahl = t.benutzer_id ? zaehleZusagen(ausschreibungId, t.benutzer_id) : 0;
+    const vorgaben = t.benutzer_id ? ladeVorgabenStatus(ausschreibungId, t.benutzer_id) : [];
     return {
       teilnehmerId: t.id,
       benutzerId: t.benutzer_id,
       name: t.name,
       wunschAnzahl: t.wunsch_anzahl,
       abgegebenAm: t.abgegeben_am,
-      zusagenAnzahl,
-      vollstaendig: istVollstaendig(zusagenAnzahl, ausschreibung.min_bloecke),
+      vorgaben,
+      vollstaendig: istVollstaendig(vorgaben, t.abgegeben_am),
       versteckt: !zeigeAlle && !istEigeneZeile,
       zellen,
     };

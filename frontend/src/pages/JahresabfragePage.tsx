@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
-import RasterMatrix, { RasterSpalte, RasterSummen, RasterZeile, RasterZelle } from "../components/RasterMatrix";
+import RasterMatrix, { RasterSpalte, RasterSummen, RasterZeile, unerfuellteVorgabenText } from "../components/RasterMatrix";
 import TerminListe from "../components/TerminListe";
 import { formatDatum, formatDatumZeit, parseDatum } from "../lib/datum";
 
@@ -15,7 +15,6 @@ interface Ausschreibung {
   bewerbungsfrist: string;
   status: string;
   sichtbarkeit: string;
-  min_bloecke: number | null;
 }
 
 interface RasterResponse {
@@ -47,6 +46,7 @@ interface Terminserie {
   id: number;
   bezeichnung: string;
   anzahlBloecke: number;
+  mindest_zusagen: number | null;
 }
 
 interface VorschlagBlock {
@@ -100,7 +100,6 @@ export default function JahresabfragePage() {
         Zeitraum {formatDatum(raster.ausschreibung.zeitraum_von)} – {formatDatum(raster.ausschreibung.zeitraum_bis)} · Frist{" "}
         {formatDatumZeit(raster.ausschreibung.bewerbungsfrist)} ·{" "}
         <span className={`status status-${raster.ausschreibung.status}`}>{raster.ausschreibung.status}</span>
-        {raster.ausschreibung.min_bloecke != null && <> · Mindestanzahl Zusagen: {raster.ausschreibung.min_bloecke}</>}
       </p>
 
       {istPlaner && (
@@ -126,9 +125,7 @@ export default function JahresabfragePage() {
         </div>
       )}
 
-      {istPlaner && tab === "raster" && (
-        <RasterMatrix spalten={raster.spalten} zeilen={raster.zeilen} summen={raster.summen} mindestZusagen={raster.ausschreibung.min_bloecke} />
-      )}
+      {istPlaner && tab === "raster" && <RasterMatrix spalten={raster.spalten} zeilen={raster.zeilen} summen={raster.summen} />}
       {istPlaner && tab === "generator" && <GeneratorTab ausschreibungId={Number(id)} peId={peId!} onErzeugt={ladeRaster} />}
       {istPlaner && tab === "teilnehmer" && <TeilnehmerTab ausschreibungId={Number(id)} onGeaendert={ladeRaster} />}
       {istPlaner && tab === "fortschritt" && <FortschrittTab ausschreibungId={Number(id)} />}
@@ -137,11 +134,11 @@ export default function JahresabfragePage() {
       {!istPlaner && (
         <>
           <h2>Meine Antworten</h2>
-          {raster.ausschreibung.min_bloecke != null && eigeneZeile && (
+          {eigeneZeile && eigeneZeile.vorgaben.length > 0 && (
             <p className={eigeneZeile.vollstaendig ? "hint" : "raster-gesperrt-hinweis"}>
               {eigeneZeile.vollstaendig
-                ? `Danke, du hast die Mindestanzahl von ${raster.ausschreibung.min_bloecke} Zusage(n) erreicht.`
-                : `Bitte noch für mindestens ${raster.ausschreibung.min_bloecke} Termine mit „Ja" antworten (aktuell ${eigeneZeile.zusagenAnzahl}).`}
+                ? "Danke, du hast alle Mindestanzahlen erreicht."
+                : `Bitte noch für folgende Termine mit „Ja" antworten: ${unerfuellteVorgabenText(eigeneZeile.vorgaben)}.`}
             </p>
           )}
           <TerminListe spalten={raster.spalten} zellen={eigeneZeile?.zellen ?? {}} onAntwort={eigeneAntwort} />
@@ -164,6 +161,7 @@ function GeneratorTab({ ausschreibungId, peId, onErzeugt }: { ausschreibungId: n
   const [gruppierung, setGruppierung] = useState<"pro_termin" | "pro_woche">("pro_woche");
   const [schichtartId, setSchichtartId] = useState<number | null>(null);
   const [personenBedarf, setPersonenBedarf] = useState(1);
+  const [mindestZusagen, setMindestZusagen] = useState<number | "">("");
   const [vorschau, setVorschau] = useState<{ anzahlTermine: number; anzahlBloecke: number } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -220,9 +218,11 @@ function GeneratorTab({ ausschreibungId, peId, onErzeugt }: { ausschreibungId: n
           gruppierung,
           schichtartIds: wochentage.length > 0 && (typ === "woechentlich" || typ === "monatlich") ? wochentage.map(() => schichtartId) : [schichtartId],
           personenBedarf,
+          mindestZusagen: mindestZusagen || undefined,
         }),
       });
       setVorschau(null);
+      setMindestZusagen("");
       ladeSerien();
       onErzeugt();
     } catch (err) {
@@ -234,6 +234,15 @@ function GeneratorTab({ ausschreibungId, peId, onErzeugt }: { ausschreibungId: n
 
   async function loeschen(sid: number) {
     await api(`/ausschreibungen/${ausschreibungId}/terminserien/${sid}`, { method: "DELETE" });
+    ladeSerien();
+    onErzeugt();
+  }
+
+  async function mindestZusagenAendern(sid: number, wert: number | "") {
+    await api(`/ausschreibungen/${ausschreibungId}/terminserien/${sid}`, {
+      method: "PUT",
+      body: JSON.stringify({ mindestZusagen: wert === "" ? null : wert }),
+    });
     ladeSerien();
     onErzeugt();
   }
@@ -322,6 +331,16 @@ function GeneratorTab({ ausschreibungId, peId, onErzeugt }: { ausschreibungId: n
           Personen-Bedarf
           <input type="number" min={1} value={personenBedarf} onChange={(e) => setPersonenBedarf(Number(e.target.value))} />
         </label>
+        <label>
+          Mindestanzahl Zusagen für diese Serie
+          <input
+            type="number"
+            min={0}
+            value={mindestZusagen}
+            onChange={(e) => setMindestZusagen(e.target.value ? Number(e.target.value) : "")}
+            placeholder="optional"
+          />
+        </label>
         <button type="button" onClick={vorschauLaden}>
           Vorschau
         </button>
@@ -333,6 +352,11 @@ function GeneratorTab({ ausschreibungId, peId, onErzeugt }: { ausschreibungId: n
             Vorschau: {vorschau.anzahlTermine} Termine, {vorschau.anzahlBloecke} Blöcke
           </p>
         )}
+        <p className="hint">
+          Die Mindestanzahl gilt je Serie, nicht für die ganze Jahresabfrage -- z. B. „mind. 3" für Wochenende Frühschicht und
+          getrennt davon „mind. 2" für Nachtschicht-4er-Blöcke. Erst wenn alle so konfigurierten Serien erfüllt sind, gilt die
+          Rückmeldung eines Teilnehmers als vollständig.
+        </p>
         {error && <div className="error">{error}</div>}
       </form>
 
@@ -342,6 +366,7 @@ function GeneratorTab({ ausschreibungId, peId, onErzeugt }: { ausschreibungId: n
           <tr>
             <th>Bezeichnung</th>
             <th>Blöcke</th>
+            <th>Mindestanzahl Zusagen</th>
             <th></th>
           </tr>
         </thead>
@@ -351,13 +376,25 @@ function GeneratorTab({ ausschreibungId, peId, onErzeugt }: { ausschreibungId: n
               <td>{s.bezeichnung}</td>
               <td>{s.anzahlBloecke}</td>
               <td>
+                <input
+                  type="number"
+                  min={0}
+                  defaultValue={s.mindest_zusagen ?? ""}
+                  placeholder="keine"
+                  onBlur={(e) => {
+                    const wert = e.target.value ? Number(e.target.value) : "";
+                    if (wert !== (s.mindest_zusagen ?? "")) mindestZusagenAendern(s.id, wert);
+                  }}
+                />
+              </td>
+              <td>
                 <button onClick={() => loeschen(s.id)}>Löschen</button>
               </td>
             </tr>
           ))}
           {serien.length === 0 && (
             <tr>
-              <td colSpan={3} className="empty">
+              <td colSpan={4} className="empty">
                 Noch keine Terminserie angelegt.
               </td>
             </tr>
@@ -493,8 +530,7 @@ function FortschrittTab({ ausschreibungId }: { ausschreibungId: number }) {
   const [daten, setDaten] = useState<{
     gesamt: number;
     abgegeben: number;
-    mindestZusagen: number | null;
-    ausstehend: { id: number; name: string; zusagenAnzahl: number }[];
+    ausstehend: { id: number; name: string; vorgaben: { bezeichnung: string; zusagenAnzahl: number; mindestZusagen: number }[] }[];
     engpaesse: { schichtblockId: number; bezeichnung: string; bedarf: number; ja: number; wennNoetig: number; ampel: string }[];
   } | null>(null);
 
@@ -517,7 +553,8 @@ function FortschrittTab({ ausschreibungId }: { ausschreibungId: number }) {
         {daten.ausstehend.map((a) => (
           <li key={a.id}>
             {a.name}
-            {daten.mindestZusagen != null && ` – ${a.zusagenAnzahl} von ${daten.mindestZusagen} Zusagen`}
+            {a.vorgaben.length > 0 &&
+              ` – offen: ${a.vorgaben.map((v) => `${v.bezeichnung} (${v.zusagenAnzahl}/${v.mindestZusagen})`).join(", ")}`}
           </li>
         ))}
         {daten.ausstehend.length === 0 && <li className="empty">Alle haben vollständig geantwortet.</li>}

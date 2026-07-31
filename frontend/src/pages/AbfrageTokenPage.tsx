@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { api } from "../api/client";
 import TerminListe from "../components/TerminListe";
-import { RasterSpalte, RasterZelle } from "../components/RasterMatrix";
+import { RasterSpalte, RasterVorgabe, RasterZelle, unerfuellteVorgabenText } from "../components/RasterMatrix";
 import { formatDatum, formatDatumZeit } from "../lib/datum";
 
 interface AbfrageDaten {
@@ -13,10 +13,9 @@ interface AbfrageDaten {
     zeitraum_bis: string;
     bewerbungsfrist: string;
     status: string;
-    min_bloecke: number | null;
   };
   spalten: RasterSpalte[];
-  zeilen: { benutzerId: number | null; zusagenAnzahl: number; vollstaendig: boolean; zellen: Record<number, RasterZelle> }[];
+  zeilen: { benutzerId: number | null; vorgaben: RasterVorgabe[]; vollstaendig: boolean; zellen: Record<number, RasterZelle> }[];
 }
 
 // Zugang per persoenlichem Link ohne Login (Konzept Kap. 3.3): eigenstaendige Seite ausserhalb
@@ -62,7 +61,6 @@ export default function AbfrageTokenPage() {
   }
 
   const eigeneZeile = daten.zeilen.find((z) => z.benutzerId === daten.teilnehmer.benutzerId);
-  const mindestZusagen = daten.ausschreibung.min_bloecke;
 
   return (
     <div className="abfrage-token-page">
@@ -77,11 +75,11 @@ export default function AbfrageTokenPage() {
           Hallo {daten.teilnehmer.name}
           {daten.teilnehmer.wunschAnzahl != null && <> · Wunsch: ca. {daten.teilnehmer.wunschAnzahl} Dienste</>}
         </p>
-        {mindestZusagen != null && eigeneZeile && (
+        {eigeneZeile && eigeneZeile.vorgaben.length > 0 && (
           <p className={eigeneZeile.vollstaendig ? "hint" : "raster-gesperrt-hinweis"}>
             {eigeneZeile.vollstaendig
-              ? `Danke, du hast die Mindestanzahl von ${mindestZusagen} Zusage(n) erreicht.`
-              : `Bitte noch für mindestens ${mindestZusagen} Termine mit „Ja" antworten (aktuell ${eigeneZeile.zusagenAnzahl}).`}
+              ? "Danke, du hast alle Mindestanzahlen erreicht."
+              : `Bitte noch für folgende Termine mit „Ja" antworten: ${unerfuellteVorgabenText(eigeneZeile.vorgaben)}.`}
           </p>
         )}
         {daten.ausschreibung.status === "geschlossen" && <p className="error">Die Bewerbungsfrist ist abgelaufen.</p>}

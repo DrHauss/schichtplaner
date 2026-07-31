@@ -197,3 +197,7 @@ ensureColumn("bewerbung", "geaendert_am", "TEXT");
 
 ensureColumn("schichtblock", "terminserie_id", "INTEGER REFERENCES terminserie(id) ON DELETE CASCADE");
 ensureColumn("schichtblock", "datum_sort", "TEXT");
+
+// Mindestanzahl Zusagen gilt je Terminserie (Block-Kategorie), nicht pauschal fuer die ganze
+// Jahresabfrage -- z. B. "mind. 3 Wochenende Fruehschicht" und getrennt "mind. 2 Nachtschicht-4er".
+ensureColumn("terminserie", "mindest_zusagen", "INTEGER");

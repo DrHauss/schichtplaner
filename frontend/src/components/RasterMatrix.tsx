@@ -14,16 +14,31 @@ export interface RasterZelle {
   grund?: string;
 }
 
+export interface RasterVorgabe {
+  terminserieId: number;
+  bezeichnung: string;
+  mindestZusagen: number;
+  zusagenAnzahl: number;
+  erfuellt: boolean;
+}
+
 export interface RasterZeile {
   teilnehmerId: number;
   benutzerId: number | null;
   name: string;
   wunschAnzahl: number | null;
   abgegebenAm: string | null;
-  zusagenAnzahl: number;
+  vorgaben: RasterVorgabe[];
   vollstaendig: boolean;
   versteckt: boolean;
   zellen: Record<number, RasterZelle>;
+}
+
+export function unerfuellteVorgabenText(vorgaben: RasterVorgabe[]): string {
+  return vorgaben
+    .filter((v) => !v.erfuellt)
+    .map((v) => `${v.bezeichnung}: ${v.zusagenAnzahl}/${v.mindestZusagen}`)
+    .join(", ");
 }
 
 export type RasterSummen = Record<number, { ja: number; wenn_noetig: number; nein: number }>;
@@ -44,12 +59,10 @@ export default function RasterMatrix({
   spalten,
   zeilen,
   summen,
-  mindestZusagen,
 }: {
   spalten: RasterSpalte[];
   zeilen: RasterZeile[];
   summen: RasterSummen;
-  mindestZusagen?: number | null;
 }) {
   return (
     <div className="raster-scroll">
@@ -76,7 +89,10 @@ export default function RasterMatrix({
               <td>
                 {z.name}
                 {!z.vollstaendig && (
-                  <span className="hint"> · unvollständig{mindestZusagen ? ` (${z.zusagenAnzahl}/${mindestZusagen})` : ""}</span>
+                  <span className="hint" title={unerfuellteVorgabenText(z.vorgaben)}>
+                    {" "}
+                    · unvollständig
+                  </span>
                 )}
               </td>
               {spalten.map((s) => {

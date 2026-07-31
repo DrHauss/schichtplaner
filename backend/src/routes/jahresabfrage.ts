@@ -3,7 +3,7 @@ import { db } from "../lib/db";
 import { requireAuth, requirePlaner, AuthedRequest } from "../middleware/auth";
 import { requirePlanerFuerAusschreibung, istPlanerFuerPlanungseinheit } from "../lib/berechtigung";
 import { berechneTermine, gruppiere, schichtartFuerDatum, Regel, Ausnahme, Gruppierung } from "../lib/terminserie";
-import { baueRaster, schreibeAntworten, legeTeilnehmerAn, erinnereAusstehende, zaehleZusagen, istVollstaendig } from "../lib/jahresabfrage";
+import { baueRaster, schreibeAntworten, legeTeilnehmerAn, erinnereAusstehende, ladeVorgabenStatus, istVollstaendig } from "../lib/jahresabfrage";
 import { berechneVergabevorschlag } from "../lib/vergabevorschlag";
 import { benachrichtige } from "../lib/notify";
 
@@ -13,15 +13,15 @@ jahresabfrageRouter.use(requireAuth);
 // --- Anlegen ---
 
 jahresabfrageRouter.post("/planungseinheiten/:id/jahresabfragen", requirePlaner("id"), (req: AuthedRequest, res) => {
-  const { titel, zeitraumVon, zeitraumBis, bewerbungsfrist, antwortModus, sichtbarkeit, zugang, mindestZusagen } = req.body ?? {};
+  const { titel, zeitraumVon, zeitraumBis, bewerbungsfrist, antwortModus, sichtbarkeit, zugang } = req.body ?? {};
   if (!titel || !zeitraumVon || !zeitraumBis || !bewerbungsfrist) {
     return res.status(400).json({ error: "titel, zeitraumVon, zeitraumBis, bewerbungsfrist erforderlich" });
   }
   const info = db
     .prepare(
       `INSERT INTO ausschreibung
-         (titel, planungseinheit_id, bewerbungsfrist, vergabeverfahren, typ, zeitraum_von, zeitraum_bis, antwort_modus, sichtbarkeit, zugang, min_bloecke)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+         (titel, planungseinheit_id, bewerbungsfrist, vergabeverfahren, typ, zeitraum_von, zeitraum_bis, antwort_modus, sichtbarkeit, zugang)
+       VALUES (?,?,?,?,?,?,?,?,?,?)`
     )
     .run(
       titel,
@@ -33,8 +33,7 @@ jahresabfrageRouter.post("/planungseinheiten/:id/jahresabfragen", requirePlaner(
       zeitraumBis,
       antwortModus ?? "ja_wennnoetig_nein",
       sichtbarkeit ?? "alle",
-      zugang ?? "link_persoenlich",
-      mindestZusagen ?? null
+      zugang ?? "link_persoenlich"
     );
   res.status(201).json({ id: info.lastInsertRowid });
 });
@@ -70,7 +69,8 @@ jahresabfrageRouter.get("/ausschreibungen/:id/terminserien", (req: AuthedRequest
 
 jahresabfrageRouter.post("/ausschreibungen/:id/terminserien", (req: AuthedRequest, res) => {
   if (!requirePlanerFuerAusschreibung(req, res, req.params.id)) return;
-  const { bezeichnung, regel, ausnahmen, gruppierung, schichtartIds, personenBedarf, qualifikationId } = (req.body ?? {}) as {
+  const { bezeichnung, regel, ausnahmen, gruppierung, schichtartIds, personenBedarf, qualifikationId, mindestZusagen } = (req.body ??
+    {}) as {
     bezeichnung: string;
     regel: Regel;
     ausnahmen?: Ausnahme[];
@@ -78,6 +78,7 @@ jahresabfrageRouter.post("/ausschreibungen/:id/terminserien", (req: AuthedReques
     schichtartIds: number[];
     personenBedarf?: number;
     qualifikationId?: number;
+    mindestZusagen?: number;
   };
   if (!bezeichnung || !regel || !Array.isArray(schichtartIds) || schichtartIds.length === 0) {
     return res.status(400).json({ error: "bezeichnung, regel und schichtartIds[] erforderlich" });
@@ -94,8 +95,8 @@ jahresabfrageRouter.post("/ausschreibungen/:id/terminserien", (req: AuthedReques
   const bloecke = gruppiere(termine, gruppierung ?? "pro_termin", bezeichnung);
 
   const insertSerie = db.prepare(
-    `INSERT INTO terminserie (ausschreibung_id, bezeichnung, regel, schichtart_ids, personen_bedarf, qualifikation_id, ausnahmen)
-     VALUES (?,?,?,?,?,?,?)`
+    `INSERT INTO terminserie (ausschreibung_id, bezeichnung, regel, schichtart_ids, personen_bedarf, qualifikation_id, ausnahmen, mindest_zusagen)
+     VALUES (?,?,?,?,?,?,?,?)`
   );
   const insertBlock = db.prepare(
     "INSERT INTO schichtblock (ausschreibung_id, bezeichnung, personen_bedarf, qualifikation_id, terminserie_id, datum_sort) VALUES (?,?,?,?,?,?)"
@@ -110,7 +111,8 @@ jahresabfrageRouter.post("/ausschreibungen/:id/terminserien", (req: AuthedReques
       JSON.stringify(schichtartIds),
       personenBedarf ?? 1,
       qualifikationId ?? null,
-      JSON.stringify(ausnahmen ?? [])
+      JSON.stringify(ausnahmen ?? []),
+      mindestZusagen ?? null
     );
     const serieId = serieInfo.lastInsertRowid;
     for (const block of bloecke) {
@@ -123,6 +125,17 @@ jahresabfrageRouter.post("/ausschreibungen/:id/terminserien", (req: AuthedReques
   })();
 
   res.status(201).json({ id: ergebnis, anzahlBloecke: bloecke.length, anzahlTermine: termine.length });
+});
+
+jahresabfrageRouter.put("/ausschreibungen/:id/terminserien/:sid", (req: AuthedRequest, res) => {
+  if (!requirePlanerFuerAusschreibung(req, res, req.params.id)) return;
+  const { mindestZusagen } = req.body ?? {};
+  db.prepare("UPDATE terminserie SET mindest_zusagen = ? WHERE id = ? AND ausschreibung_id = ?").run(
+    mindestZusagen === "" || mindestZusagen == null ? null : mindestZusagen,
+    req.params.sid,
+    req.params.id
+  );
+  res.json({ ok: true });
 });
 
 jahresabfrageRouter.delete("/ausschreibungen/:id/terminserien/:sid", (req: AuthedRequest, res) => {
@@ -203,15 +216,17 @@ jahresabfrageRouter.post("/ausschreibungen/:id/erinnern", (req: AuthedRequest, r
 
 jahresabfrageRouter.get("/ausschreibungen/:id/fortschritt", (req: AuthedRequest, res) => {
   if (!requirePlanerFuerAusschreibung(req, res, req.params.id)) return;
-  const ausschreibung = db.prepare("SELECT min_bloecke FROM ausschreibung WHERE id = ?").get(req.params.id) as
-    | { min_bloecke: number | null }
-    | undefined;
   const teilnehmer = db
-    .prepare("SELECT id, name, benutzer_id FROM abfrage_teilnehmer WHERE ausschreibung_id = ?")
+    .prepare("SELECT id, name, benutzer_id, abgegeben_am FROM abfrage_teilnehmer WHERE ausschreibung_id = ?")
     .all(req.params.id) as any[];
   const mitStatus = teilnehmer.map((t) => {
-    const zusagenAnzahl = t.benutzer_id ? zaehleZusagen(req.params.id, t.benutzer_id) : 0;
-    return { id: t.id, name: t.name, zusagenAnzahl, vollstaendig: istVollstaendig(zusagenAnzahl, ausschreibung?.min_bloecke ?? null) };
+    const vorgaben = t.benutzer_id ? ladeVorgabenStatus(req.params.id, t.benutzer_id) : [];
+    return {
+      id: t.id,
+      name: t.name,
+      vorgaben: vorgaben.filter((v) => !v.erfuellt),
+      vollstaendig: istVollstaendig(vorgaben, t.abgegeben_am),
+    };
   });
   const ausstehend = mitStatus.filter((t) => !t.vollstaendig);
 
@@ -230,7 +245,6 @@ jahresabfrageRouter.get("/ausschreibungen/:id/fortschritt", (req: AuthedRequest,
   res.json({
     gesamt: teilnehmer.length,
     abgegeben: mitStatus.length - ausstehend.length,
-    mindestZusagen: ausschreibung?.min_bloecke ?? null,
     ausstehend,
     engpaesse,
   });
