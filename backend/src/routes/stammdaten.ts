@@ -2,9 +2,17 @@ import { Router } from "express";
 import { db } from "../lib/db";
 import { requireAuth, requirePlaner, AuthedRequest } from "../middleware/auth";
 import { istPlanerFuerPlanungseinheit } from "../lib/berechtigung";
+import { berechneArbeitstage } from "../lib/feiertage";
 
 export const stammdatenRouter = Router();
 stammdatenRouter.use(requireAuth);
+
+// Arbeitstage eines Jahres in NRW (Wochentage abzueglich gesetzlicher Feiertage) -- Grundlage
+// fuer die Jahresarbeitszeit-Berechnung aus der taeglichen Sollarbeitszeit je Mitarbeiter.
+stammdatenRouter.get("/arbeitstage", (req, res) => {
+  const jahr = Number(req.query.jahr) || new Date().getFullYear();
+  res.json(berechneArbeitstage(jahr));
+});
 
 // Planungseinheiten
 stammdatenRouter.get("/planungseinheiten", (req: AuthedRequest, res) => {

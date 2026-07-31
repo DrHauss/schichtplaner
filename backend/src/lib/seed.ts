@@ -16,6 +16,12 @@ const mitarbeiter1 = upsertUser("anna@schichtweb.de", "Anna Beispiel", "test1234
 const mitarbeiter2 = upsertUser("ben@schichtweb.de", "Ben Muster", "test1234");
 const mitarbeiter3 = upsertUser("clara@schichtweb.de", "Clara Test", "test1234");
 
+// Taegliche Sollarbeitszeit: Anna und Ben Vollzeit, Clara Teilzeit -- Grundlage der
+// Jahresarbeitszeit-Berechnung (Konzept: Sollarbeitszeit x Arbeitstage des Jahres in NRW).
+db.prepare("UPDATE benutzer SET soll_stunden_taeglich = ? WHERE id = ? AND soll_stunden_taeglich IS NULL").run(8, mitarbeiter1);
+db.prepare("UPDATE benutzer SET soll_stunden_taeglich = ? WHERE id = ? AND soll_stunden_taeglich IS NULL").run(8, mitarbeiter2);
+db.prepare("UPDATE benutzer SET soll_stunden_taeglich = ? WHERE id = ? AND soll_stunden_taeglich IS NULL").run(6, mitarbeiter3);
+
 let pe = db.prepare("SELECT id FROM planungseinheit WHERE name = ?").get("Pflegeteam Station 1") as
   | { id: number }
   | undefined;

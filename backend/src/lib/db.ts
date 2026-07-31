@@ -260,3 +260,7 @@ ensureColumn("terminserie", "mindest_zusagen", "INTEGER");
 // Abwesenheitsschichten werden wie normale Schichten der Plantafel zugewiesen, loesen aber keine
 // ArbZG-Konfliktpruefung (Ruhezeit) aus -- siehe regelwerk.ts.
 ensureColumn("schichtart", "kategorie", "TEXT NOT NULL DEFAULT 'dienst'");
+
+// Taegliche Sollarbeitszeit je Mitarbeiter -- Grundlage fuer die Berechnung der
+// Jahresarbeitszeit ueber die Arbeitstage des Jahres (siehe lib/feiertage.ts).
+ensureColumn("benutzer", "soll_stunden_taeglich", "REAL");

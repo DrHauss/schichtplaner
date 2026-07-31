@@ -50,8 +50,16 @@ interface Benutzer {
   name: string;
   personalnr: string | null;
   wochenstunden: number;
+  soll_stunden_taeglich: number | null;
   ist_admin: number;
   mitgliedschaften: Mitgliedschaft[];
+}
+
+interface Arbeitstage {
+  jahr: number;
+  wochentageGesamt: number;
+  feiertageAnWochentagen: number;
+  arbeitstage: number;
 }
 
 export default function StammdatenPage() {
@@ -355,6 +363,7 @@ function BenutzerverwaltungSektion({ alleEinheiten }: { alleEinheiten: Planungse
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [personalnr, setPersonalnr] = useState("");
+  const [sollStundenTaeglich, setSollStundenTaeglich] = useState<number | "">("");
   const [neuesPasswort, setNeuesPasswort] = useState<{ email: string; passwort: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -362,10 +371,22 @@ function BenutzerverwaltungSektion({ alleEinheiten }: { alleEinheiten: Planungse
   const [zuweisenPeId, setZuweisenPeId] = useState<number | null>(null);
   const [zuweisenRolle, setZuweisenRolle] = useState("mitarbeiter");
 
+  const [jahr, setJahr] = useState(new Date().getFullYear() + 1);
+  const [arbeitstage, setArbeitstage] = useState<Arbeitstage | null>(null);
+
   function laden() {
     api<Benutzer[]>("/benutzer").then(setBenutzer);
   }
   useEffect(laden, []);
+
+  useEffect(() => {
+    api<Arbeitstage>(`/arbeitstage?jahr=${jahr}`).then(setArbeitstage);
+  }, [jahr]);
+
+  async function sollStundenAendern(benutzerId: number, wert: number | "") {
+    await api(`/benutzer/${benutzerId}`, { method: "PUT", body: JSON.stringify({ sollStundenTaeglich: wert === "" ? null : wert }) });
+    laden();
+  }
 
   async function anlegen(e: FormEvent) {
     e.preventDefault();
@@ -373,12 +394,13 @@ function BenutzerverwaltungSektion({ alleEinheiten }: { alleEinheiten: Planungse
     try {
       const res = await api<{ email: string; temporaeresPasswort: string }>("/benutzer", {
         method: "POST",
-        body: JSON.stringify({ name, email, personalnr: personalnr || undefined }),
+        body: JSON.stringify({ name, email, personalnr: personalnr || undefined, sollStundenTaeglich: sollStundenTaeglich || undefined }),
       });
       setNeuesPasswort({ email: res.email, passwort: res.temporaeresPasswort });
       setName("");
       setEmail("");
       setPersonalnr("");
+      setSollStundenTaeglich("");
       laden();
     } catch (err) {
       setError((err as Error).message);
@@ -417,6 +439,17 @@ function BenutzerverwaltungSektion({ alleEinheiten }: { alleEinheiten: Planungse
         <label>
           Personalnummer
           <input value={personalnr} onChange={(e) => setPersonalnr(e.target.value)} />
+        </label>
+        <label>
+          Soll-Std./Tag
+          <input
+            type="number"
+            min={0}
+            step={0.5}
+            value={sollStundenTaeglich}
+            onChange={(e) => setSollStundenTaeglich(e.target.value ? Number(e.target.value) : "")}
+            placeholder="optional"
+          />
         </label>
         <button type="submit">Anlegen</button>
       </form>
@@ -465,11 +498,24 @@ function BenutzerverwaltungSektion({ alleEinheiten }: { alleEinheiten: Planungse
         </button>
       </form>
 
+      <div className="inline-label">
+        Jahresarbeitszeit für
+        <input type="number" value={jahr} onChange={(e) => setJahr(Number(e.target.value))} style={{ width: "5rem" }} />
+        {arbeitstage && (
+          <span className="hint">
+            {arbeitstage.arbeitstage} Arbeitstage ({arbeitstage.wochentageGesamt} Wochentage − {arbeitstage.feiertageAnWochentagen}{" "}
+            Feiertage NRW an Wochentagen)
+          </span>
+        )}
+      </div>
+
       <table className="table">
         <thead>
           <tr>
             <th>Name</th>
             <th>E-Mail</th>
+            <th>Soll-Std./Tag</th>
+            <th>Jahresarbeitszeit {jahr}</th>
             <th>Rollen</th>
           </tr>
         </thead>
@@ -481,6 +527,24 @@ function BenutzerverwaltungSektion({ alleEinheiten }: { alleEinheiten: Planungse
                 {!!b.ist_admin && <span className="badge-typ"> Admin</span>}
               </td>
               <td>{b.email}</td>
+              <td>
+                <input
+                  type="number"
+                  min={0}
+                  step={0.5}
+                  defaultValue={b.soll_stunden_taeglich ?? ""}
+                  placeholder="keine"
+                  onBlur={(e) => {
+                    const wert = e.target.value ? Number(e.target.value) : "";
+                    if (wert !== (b.soll_stunden_taeglich ?? "")) sollStundenAendern(b.id, wert);
+                  }}
+                />
+              </td>
+              <td>
+                {b.soll_stunden_taeglich != null && arbeitstage
+                  ? `${(b.soll_stunden_taeglich * arbeitstage.arbeitstage).toLocaleString("de-DE", { maximumFractionDigits: 1 })} h`
+                  : "–"}
+              </td>
               <td>
                 {b.mitgliedschaften.map((m) => (
                   <span key={m.id} className="rolle-chip">
