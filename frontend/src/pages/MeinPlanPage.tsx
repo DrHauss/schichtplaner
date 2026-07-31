@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
 import { getToken } from "../api/client";
+import { formatDatum, formatDatumZeit } from "../lib/datum";
 
 interface PlanEintrag {
   id: number;
@@ -85,7 +86,7 @@ export default function MeinPlanPage() {
           <tbody>
             {plan.map((p) => (
               <tr key={p.id}>
-                <td>{p.datum}</td>
+                <td>{formatDatum(p.datum)}</td>
                 <td>
                   <span className="badge" style={{ background: p.farbe }}>
                     {p.kuerzel}
@@ -107,7 +108,7 @@ export default function MeinPlanPage() {
         <ul className="notif-list">
           {benachrichtigungen.map((n) => (
             <li key={n.id} className={n.gelesen_am ? "read" : "unread"}>
-              <strong>{n.typ}</strong> — {n.payload} <span className="ts">{n.erstellt_am}</span>
+              <strong>{n.typ}</strong> — {n.payload} <span className="ts">{formatDatumZeit(n.erstellt_am)}</span>
             </li>
           ))}
         </ul>

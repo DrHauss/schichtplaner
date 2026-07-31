@@ -4,6 +4,7 @@ import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import RasterMatrix, { RasterSpalte, RasterSummen, RasterZeile, RasterZelle } from "../components/RasterMatrix";
 import TerminListe from "../components/TerminListe";
+import { formatDatum, formatDatumZeit, parseDatum } from "../lib/datum";
 
 interface Ausschreibung {
   id: number;
@@ -14,6 +15,7 @@ interface Ausschreibung {
   bewerbungsfrist: string;
   status: string;
   sichtbarkeit: string;
+  min_bloecke: number | null;
 }
 
 interface RasterResponse {
@@ -95,8 +97,10 @@ export default function JahresabfragePage() {
     <div className="page">
       <h1>{raster.ausschreibung.titel}</h1>
       <p className="hint">
-        Zeitraum {raster.ausschreibung.zeitraum_von} – {raster.ausschreibung.zeitraum_bis} · Frist {raster.ausschreibung.bewerbungsfrist} ·{" "}
+        Zeitraum {formatDatum(raster.ausschreibung.zeitraum_von)} – {formatDatum(raster.ausschreibung.zeitraum_bis)} · Frist{" "}
+        {formatDatumZeit(raster.ausschreibung.bewerbungsfrist)} ·{" "}
         <span className={`status status-${raster.ausschreibung.status}`}>{raster.ausschreibung.status}</span>
+        {raster.ausschreibung.min_bloecke != null && <> · Mindestanzahl Zusagen: {raster.ausschreibung.min_bloecke}</>}
       </p>
 
       {istPlaner && (
@@ -122,7 +126,9 @@ export default function JahresabfragePage() {
         </div>
       )}
 
-      {istPlaner && tab === "raster" && <RasterMatrix spalten={raster.spalten} zeilen={raster.zeilen} summen={raster.summen} />}
+      {istPlaner && tab === "raster" && (
+        <RasterMatrix spalten={raster.spalten} zeilen={raster.zeilen} summen={raster.summen} mindestZusagen={raster.ausschreibung.min_bloecke} />
+      )}
       {istPlaner && tab === "generator" && <GeneratorTab ausschreibungId={Number(id)} peId={peId!} onErzeugt={ladeRaster} />}
       {istPlaner && tab === "teilnehmer" && <TeilnehmerTab ausschreibungId={Number(id)} onGeaendert={ladeRaster} />}
       {istPlaner && tab === "fortschritt" && <FortschrittTab ausschreibungId={Number(id)} />}
@@ -131,6 +137,13 @@ export default function JahresabfragePage() {
       {!istPlaner && (
         <>
           <h2>Meine Antworten</h2>
+          {raster.ausschreibung.min_bloecke != null && eigeneZeile && (
+            <p className={eigeneZeile.vollstaendig ? "hint" : "raster-gesperrt-hinweis"}>
+              {eigeneZeile.vollstaendig
+                ? `Danke, du hast die Mindestanzahl von ${raster.ausschreibung.min_bloecke} Zusage(n) erreicht.`
+                : `Bitte noch für mindestens ${raster.ausschreibung.min_bloecke} Termine mit „Ja" antworten (aktuell ${eigeneZeile.zusagenAnzahl}).`}
+            </p>
+          )}
           <TerminListe spalten={raster.spalten} zellen={eigeneZeile?.zellen ?? {}} onAntwort={eigeneAntwort} />
         </>
       )}
@@ -169,7 +182,7 @@ function GeneratorTab({ ausschreibungId, peId, onErzeugt }: { ausschreibungId: n
 
   function regelPayload() {
     if (typ === "einzeln") {
-      return { typ, daten: daten.split(",").map((d) => d.trim()).filter(Boolean) };
+      return { typ, daten: daten.split(",").map((d) => parseDatum(d)).filter(Boolean) };
     }
     if (typ === "feiertage") {
       return { typ, von, bis };
@@ -284,8 +297,8 @@ function GeneratorTab({ ausschreibungId, peId, onErzeugt }: { ausschreibungId: n
         )}
         {typ === "einzeln" && (
           <label>
-            Termine (Komma-getrennt, YYYY-MM-DD)
-            <input value={daten} onChange={(e) => setDaten(e.target.value)} placeholder="2027-12-24, 2027-12-31" />
+            Termine (Komma-getrennt, TT.MM.JJJJ)
+            <input value={daten} onChange={(e) => setDaten(e.target.value)} placeholder="24.12.2027, 31.12.2027" />
           </label>
         )}
         <label>
@@ -480,7 +493,8 @@ function FortschrittTab({ ausschreibungId }: { ausschreibungId: number }) {
   const [daten, setDaten] = useState<{
     gesamt: number;
     abgegeben: number;
-    ausstehend: { id: number; name: string }[];
+    mindestZusagen: number | null;
+    ausstehend: { id: number; name: string; zusagenAnzahl: number }[];
     engpaesse: { schichtblockId: number; bezeichnung: string; bedarf: number; ja: number; wennNoetig: number; ampel: string }[];
   } | null>(null);
 
@@ -496,14 +510,17 @@ function FortschrittTab({ ausschreibungId }: { ausschreibungId: number }) {
         <strong>
           {daten.abgegeben} von {daten.gesamt}
         </strong>{" "}
-        haben geantwortet.
+        haben vollständig geantwortet.
       </p>
-      <h2>Ausstehend</h2>
+      <h2>Unvollständig</h2>
       <ul>
         {daten.ausstehend.map((a) => (
-          <li key={a.id}>{a.name}</li>
+          <li key={a.id}>
+            {a.name}
+            {daten.mindestZusagen != null && ` – ${a.zusagenAnzahl} von ${daten.mindestZusagen} Zusagen`}
+          </li>
         ))}
-        {daten.ausstehend.length === 0 && <li className="empty">Alle haben geantwortet.</li>}
+        {daten.ausstehend.length === 0 && <li className="empty">Alle haben vollständig geantwortet.</li>}
       </ul>
       <h2>Engpässe</h2>
       <table className="table">

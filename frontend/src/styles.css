@@ -82,6 +82,10 @@ body {
 .inline-label { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 1rem; }
 
 .badge-typ { display: inline-block; margin-left: 0.4rem; padding: 0.1rem 0.4rem; font-size: 0.75rem; background: #ede9fe; color: #6d28d9; border-radius: 4px; }
+.page section { margin-bottom: 2rem; }
+.rolle-chip { display: inline-flex; align-items: center; gap: 0.25rem; background: #f1f5f9; padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.85rem; margin: 0.1rem; }
+.rolle-chip button { border: none; background: transparent; cursor: pointer; color: #94a3b8; font-weight: 700; padding: 0; }
+.rolle-chip button:hover { color: #dc2626; }
 
 /* Rasteransicht (Jahresabfrage) */
 .raster-scroll { overflow-x: auto; }

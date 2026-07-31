@@ -118,9 +118,17 @@ function isoWoche(datumStr: string): string {
   return `${d.getUTCFullYear()}-W${String(woche).padStart(2, "0")}`;
 }
 
+// Anzeigeformat TT.MM.JJJJ fuer die vom Generator erzeugten Bezeichnungen (Raster-Spaltenkoepfe,
+// Planer-Karten, CSV-Export) -- der zugrunde liegende ISO-Termin bleibt in "termine" unveraendert
+// fuer Sortierung/API-Nutzung erhalten.
+function formatDatumKurz(iso: string): string {
+  const [jahr, monat, tag] = iso.split("-");
+  return `${tag}.${monat}.${jahr}`;
+}
+
 export function gruppiere(termine: string[], gruppierung: Gruppierung, bezeichnungVorlage: string): GruppierterBlock[] {
   if (gruppierung === "pro_termin") {
-    return termine.map((t) => ({ bezeichnung: `${bezeichnungVorlage} ${t}`, termine: [t] }));
+    return termine.map((t) => ({ bezeichnung: `${bezeichnungVorlage} ${formatDatumKurz(t)}`, termine: [t] }));
   }
   const gruppen = new Map<string, string[]>();
   for (const t of termine) {
@@ -132,7 +140,10 @@ export function gruppiere(termine: string[], gruppierung: Gruppierung, bezeichnu
     .sort((a, b) => a[0].localeCompare(b[0]))
     .map(([, ts]) => {
       const sortiert = [...ts].sort();
-      const spanne = sortiert.length > 1 ? `${sortiert[0]}–${sortiert[sortiert.length - 1]}` : sortiert[0];
+      const spanne =
+        sortiert.length > 1
+          ? `${formatDatumKurz(sortiert[0])}–${formatDatumKurz(sortiert[sortiert.length - 1])}`
+          : formatDatumKurz(sortiert[0]);
       return { bezeichnung: `${bezeichnungVorlage} ${spanne}`, termine: sortiert };
     });
 }

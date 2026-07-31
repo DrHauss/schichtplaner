@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { RasterSpalte, RasterZelle } from "./RasterMatrix";
+import { formatDatum } from "../lib/datum";
 
 const OPTIONEN: { wert: string; label: string }[] = [
   { wert: "ja", label: "Ja" },
@@ -46,7 +47,7 @@ export default function TerminListe({
             <ul className="schicht-list">
               {s.schichten.map((sch, i) => (
                 <li key={i}>
-                  {sch.datum} · {sch.kuerzel} ({sch.beginn}–{sch.ende})
+                  {formatDatum(sch.datum)} · {sch.kuerzel} ({sch.beginn}–{sch.ende})
                 </li>
               ))}
             </ul>

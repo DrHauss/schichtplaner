@@ -19,8 +19,27 @@ export interface RasterZeile {
   name: string;
   wunschAnzahl: number | null;
   abgegebenAm: string | null;
+  zusagenAnzahl: number;
+  vollstaendig: boolean;
   versteckt: boolean;
   zellen: Record<number, { antwort: string; gesperrt: boolean; grund?: string }>;
+}
+
+// Anzahl "Ja"-Antworten eines Teilnehmers in dieser Jahresabfrage. Solange sie unter der
+// konfigurierten Mindestanzahl (ausschreibung.min_bloecke) liegt, gilt die Rueckmeldung als
+// unvollstaendig -- unabhaengig davon, ob bereits (mit "Nein"/"Wenn noetig") geantwortet wurde.
+export function zaehleZusagen(ausschreibungId: number | string, benutzerId: number): number {
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) c FROM bewerbung bw JOIN schichtblock sb ON sb.id = bw.schichtblock_id
+       WHERE bw.benutzer_id = ? AND sb.ausschreibung_id = ? AND bw.antwort = 'ja'`
+    )
+    .get(benutzerId, ausschreibungId) as { c: number };
+  return row.c;
+}
+
+export function istVollstaendig(zusagenAnzahl: number, minBloecke: number | null): boolean {
+  return !minBloecke || zusagenAnzahl >= minBloecke;
 }
 
 // Baut die Rasteransicht (Konzept Kap. 3.2) fuer eine Jahresabfrage. requesterBenutzerId/istPlaner
@@ -84,12 +103,15 @@ export function baueRaster(
         zellen[b.id] = { antwort: bw?.antwort ?? "", gesperrt, grund };
       }
     }
+    const zusagenAnzahl = t.benutzer_id ? zaehleZusagen(ausschreibungId, t.benutzer_id) : 0;
     return {
       teilnehmerId: t.id,
       benutzerId: t.benutzer_id,
       name: t.name,
       wunschAnzahl: t.wunsch_anzahl,
       abgegebenAm: t.abgegeben_am,
+      zusagenAnzahl,
+      vollstaendig: istVollstaendig(zusagenAnzahl, ausschreibung.min_bloecke),
       versteckt: !zeigeAlle && !istEigeneZeile,
       zellen,
     };

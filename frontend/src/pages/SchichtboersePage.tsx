@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
+import { formatDatumZeit } from "../lib/datum";
 
 interface Ausschreibung {
   id: number;
@@ -30,6 +31,7 @@ export default function SchichtboersePage() {
   const [jaVon, setJaVon] = useState("");
   const [jaBis, setJaBis] = useState("");
   const [jaFrist, setJaFrist] = useState("");
+  const [jaMindestZusagen, setJaMindestZusagen] = useState<number | "">("");
   const [jaBusy, setJaBusy] = useState(false);
   const [jaError, setJaError] = useState<string | null>(null);
 
@@ -71,12 +73,19 @@ export default function SchichtboersePage() {
     try {
       const res = await api<{ id: number }>(`/planungseinheiten/${peId}/jahresabfragen`, {
         method: "POST",
-        body: JSON.stringify({ titel: jaTitel, zeitraumVon: jaVon, zeitraumBis: jaBis, bewerbungsfrist: jaFrist }),
+        body: JSON.stringify({
+          titel: jaTitel,
+          zeitraumVon: jaVon,
+          zeitraumBis: jaBis,
+          bewerbungsfrist: jaFrist,
+          mindestZusagen: jaMindestZusagen || undefined,
+        }),
       });
       setJaTitel("");
       setJaVon("");
       setJaBis("");
       setJaFrist("");
+      setJaMindestZusagen("");
       load(peId);
       navigate(`/schichtboerse/jahresabfrage/${res.id}`);
     } catch (err) {
@@ -147,9 +156,22 @@ export default function SchichtboersePage() {
             Bewerbungsfrist
             <input type="datetime-local" value={jaFrist} onChange={(e) => setJaFrist(e.target.value)} required />
           </label>
+          <label>
+            Mindestanzahl Zusagen je Teilnehmer
+            <input
+              type="number"
+              min={0}
+              value={jaMindestZusagen}
+              onChange={(e) => setJaMindestZusagen(e.target.value ? Number(e.target.value) : "")}
+              placeholder="optional"
+            />
+          </label>
           <button type="submit" disabled={jaBusy}>
             Anlegen
           </button>
+          <p className="hint">
+            Solange ein Teilnehmer nicht mindestens so viele Termine mit „Ja" beantwortet hat, gilt seine Rückmeldung als unvollständig.
+          </p>
           {jaError && <div className="error">{jaError}</div>}
         </form>
       )}
@@ -171,7 +193,7 @@ export default function SchichtboersePage() {
                 {a.titel}
                 {a.typ === "jahresabfrage" && <span className="badge-typ"> Jahresabfrage</span>}
               </td>
-              <td>{a.bewerbungsfrist}</td>
+              <td>{formatDatumZeit(a.bewerbungsfrist)}</td>
               <td>{a.vergabeverfahren}</td>
               <td>
                 <span className={`status status-${a.status}`}>{a.status}</span>
