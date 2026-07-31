@@ -5,6 +5,8 @@ import LoginPage from "./pages/LoginPage";
 import MeinPlanPage from "./pages/MeinPlanPage";
 import SchichtboersePage from "./pages/SchichtboersePage";
 import AusschreibungDetailPage from "./pages/AusschreibungDetailPage";
+import JahresabfragePage from "./pages/JahresabfragePage";
+import AbfrageTokenPage from "./pages/AbfrageTokenPage";
 import PlantafelPage from "./pages/PlantafelPage";
 import StammdatenPage from "./pages/StammdatenPage";
 
@@ -19,6 +21,7 @@ export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/abfrage/:token" element={<AbfrageTokenPage />} />
       <Route
         path="/"
         element={
@@ -31,6 +34,7 @@ export default function App() {
         <Route path="mein-plan" element={<MeinPlanPage />} />
         <Route path="schichtboerse" element={<SchichtboersePage />} />
         <Route path="schichtboerse/ausschreibung/:id" element={<AusschreibungDetailPage />} />
+        <Route path="schichtboerse/jahresabfrage/:id" element={<JahresabfragePage />} />
         <Route path="plantafel" element={<PlantafelPage />} />
         <Route path="stammdaten" element={<StammdatenPage />} />
       </Route>

@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 
@@ -10,9 +10,11 @@ interface Ausschreibung {
   vergabeverfahren: string;
   status: "entwurf" | "veroeffentlicht" | "geschlossen";
   erstellt_am: string;
+  typ: "runde" | "jahresabfrage";
 }
 
 export default function SchichtboersePage() {
+  const navigate = useNavigate();
   const { mitgliedschaften, user } = useAuth();
   const planerEinheiten = mitgliedschaften.filter((m) => m.rolle === "planer" || user?.istAdmin);
   const alleEinheiten = mitgliedschaften;
@@ -23,6 +25,13 @@ export default function SchichtboersePage() {
   const [neuVerfahren, setNeuVerfahren] = useState("fairness");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const [jaTitel, setJaTitel] = useState("");
+  const [jaVon, setJaVon] = useState("");
+  const [jaBis, setJaBis] = useState("");
+  const [jaFrist, setJaFrist] = useState("");
+  const [jaBusy, setJaBusy] = useState(false);
+  const [jaError, setJaError] = useState<string | null>(null);
 
   const istPlanerHier = planerEinheiten.some((m) => m.planungseinheit_id === peId);
 
@@ -51,6 +60,29 @@ export default function SchichtboersePage() {
       setError((err as Error).message);
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function jahresabfrageAnlegen(e: FormEvent) {
+    e.preventDefault();
+    if (!peId) return;
+    setJaBusy(true);
+    setJaError(null);
+    try {
+      const res = await api<{ id: number }>(`/planungseinheiten/${peId}/jahresabfragen`, {
+        method: "POST",
+        body: JSON.stringify({ titel: jaTitel, zeitraumVon: jaVon, zeitraumBis: jaBis, bewerbungsfrist: jaFrist }),
+      });
+      setJaTitel("");
+      setJaVon("");
+      setJaBis("");
+      setJaFrist("");
+      load(peId);
+      navigate(`/schichtboerse/jahresabfrage/${res.id}`);
+    } catch (err) {
+      setJaError((err as Error).message);
+    } finally {
+      setJaBusy(false);
     }
   }
 
@@ -96,6 +128,32 @@ export default function SchichtboersePage() {
         </form>
       )}
 
+      {istPlanerHier && (
+        <form className="card form-inline" onSubmit={jahresabfrageAnlegen}>
+          <h2>Neue Jahresabfrage</h2>
+          <label>
+            Titel
+            <input value={jaTitel} onChange={(e) => setJaTitel(e.target.value)} required placeholder="z. B. Wochenenddienste 2027" />
+          </label>
+          <label>
+            Zeitraum von
+            <input type="date" value={jaVon} onChange={(e) => setJaVon(e.target.value)} required />
+          </label>
+          <label>
+            Zeitraum bis
+            <input type="date" value={jaBis} onChange={(e) => setJaBis(e.target.value)} required />
+          </label>
+          <label>
+            Bewerbungsfrist
+            <input type="datetime-local" value={jaFrist} onChange={(e) => setJaFrist(e.target.value)} required />
+          </label>
+          <button type="submit" disabled={jaBusy}>
+            Anlegen
+          </button>
+          {jaError && <div className="error">{jaError}</div>}
+        </form>
+      )}
+
       <table className="table">
         <thead>
           <tr>
@@ -109,14 +167,19 @@ export default function SchichtboersePage() {
         <tbody>
           {ausschreibungen.map((a) => (
             <tr key={a.id}>
-              <td>{a.titel}</td>
+              <td>
+                {a.titel}
+                {a.typ === "jahresabfrage" && <span className="badge-typ"> Jahresabfrage</span>}
+              </td>
               <td>{a.bewerbungsfrist}</td>
               <td>{a.vergabeverfahren}</td>
               <td>
                 <span className={`status status-${a.status}`}>{a.status}</span>
               </td>
               <td>
-                <Link to={`/schichtboerse/ausschreibung/${a.id}`}>Öffnen</Link>
+                <Link to={a.typ === "jahresabfrage" ? `/schichtboerse/jahresabfrage/${a.id}` : `/schichtboerse/ausschreibung/${a.id}`}>
+                  Öffnen
+                </Link>
               </td>
             </tr>
           ))}

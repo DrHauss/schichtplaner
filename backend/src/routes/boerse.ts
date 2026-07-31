@@ -3,6 +3,7 @@ import { db } from "../lib/db";
 import { requireAuth, requirePlaner, AuthedRequest } from "../middleware/auth";
 import { pruefeKonflikte } from "../lib/regelwerk";
 import { benachrichtige } from "../lib/notify";
+import { requirePlanerFuerAusschreibung } from "../lib/berechtigung";
 
 export const boerseRouter = Router();
 boerseRouter.use(requireAuth);
@@ -27,25 +28,6 @@ boerseRouter.post("/planungseinheiten/:id/ausschreibungen", requirePlaner("id"),
     .run(titel, req.params.id, bewerbungsfrist, vergabeverfahren ?? "manuell", minBloecke ?? null, maxBloecke ?? null);
   res.status(201).json({ id: info.lastInsertRowid });
 });
-
-function requirePlanerFuerAusschreibung(req: AuthedRequest, res: any, ausschreibungId: string): boolean {
-  if (req.user!.istAdmin) return true;
-  const ausschreibung = db.prepare("SELECT planungseinheit_id FROM ausschreibung WHERE id = ?").get(ausschreibungId) as
-    | { planungseinheit_id: number }
-    | undefined;
-  if (!ausschreibung) {
-    res.status(404).json({ error: "Ausschreibung nicht gefunden" });
-    return false;
-  }
-  const istPlaner = db
-    .prepare("SELECT 1 FROM mitgliedschaft WHERE benutzer_id = ? AND planungseinheit_id = ? AND rolle = 'planer'")
-    .get(req.user!.sub, ausschreibung.planungseinheit_id);
-  if (!istPlaner) {
-    res.status(403).json({ error: "Keine Planer-Berechtigung fuer diese Planungseinheit" });
-    return false;
-  }
-  return true;
-}
 
 boerseRouter.post("/ausschreibungen/:id/schichtbloecke", (req: AuthedRequest, res) => {
   if (!requirePlanerFuerAusschreibung(req, res, req.params.id)) return;
