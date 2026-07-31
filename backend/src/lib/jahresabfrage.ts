@@ -13,33 +13,66 @@ export interface RasterSpalte {
   schichten: { datum: string; kuerzel: string; beginn: string; ende: string }[];
 }
 
+export interface Vorgabe {
+  terminserieId: number;
+  bezeichnung: string;
+  mindestZusagen: number;
+  zusagenAnzahl: number;
+  erfuellt: boolean;
+}
+
 export interface RasterZeile {
   teilnehmerId: number;
   benutzerId: number | null;
   name: string;
   wunschAnzahl: number | null;
   abgegebenAm: string | null;
-  zusagenAnzahl: number;
+  vorgaben: Vorgabe[];
   vollstaendig: boolean;
   versteckt: boolean;
   zellen: Record<number, { antwort: string; gesperrt: boolean; grund?: string }>;
 }
 
-// Anzahl "Ja"-Antworten eines Teilnehmers in dieser Jahresabfrage. Solange sie unter der
-// konfigurierten Mindestanzahl (ausschreibung.min_bloecke) liegt, gilt die Rueckmeldung als
-// unvollstaendig -- unabhaengig davon, ob bereits (mit "Nein"/"Wenn noetig") geantwortet wurde.
-export function zaehleZusagen(ausschreibungId: number | string, benutzerId: number): number {
-  const row = db
+// Mindestanzahl gilt je Terminserie, nicht pauschal fuer die ganze Jahresabfrage -- z. B.
+// "mind. 3 Wochenende Fruehschicht" und getrennt davon "mind. 2 Nachtschicht-4er-Bloecke".
+// Innerhalb einer Serie kann die Mindestanzahl zusaetzlich je Teilnehmer individuell
+// abweichen (terminserie_mindestzusagen, z. B. weniger Nachtschichten fuer Teilzeitkraefte);
+// ohne individuellen Eintrag gilt der Standard der Serie. Eine Serie ohne Standard und ohne
+// individuelle Vorgabe fuer diesen Teilnehmer erzeugt keine Vorgabe.
+export function ladeVorgabenStatus(ausschreibungId: number | string, teilnehmerId: number, benutzerId: number): Vorgabe[] {
+  const serien = db
     .prepare(
-      `SELECT COUNT(*) c FROM bewerbung bw JOIN schichtblock sb ON sb.id = bw.schichtblock_id
-       WHERE bw.benutzer_id = ? AND sb.ausschreibung_id = ? AND bw.antwort = 'ja'`
+      `SELECT t.id, t.bezeichnung, t.mindest_zusagen as standard, tm.mindest_zusagen as override
+       FROM terminserie t
+       LEFT JOIN terminserie_mindestzusagen tm ON tm.terminserie_id = t.id AND tm.teilnehmer_id = ?
+       WHERE t.ausschreibung_id = ? AND (t.mindest_zusagen IS NOT NULL OR tm.mindest_zusagen IS NOT NULL)`
     )
-    .get(benutzerId, ausschreibungId) as { c: number };
-  return row.c;
+    .all(teilnehmerId, ausschreibungId) as { id: number; bezeichnung: string; standard: number | null; override: number | null }[];
+  return serien.map((s) => {
+    const mindestZusagen = s.override ?? (s.standard as number);
+    const zusagenAnzahl = (
+      db
+        .prepare(
+          `SELECT COUNT(*) c FROM bewerbung bw JOIN schichtblock sb ON sb.id = bw.schichtblock_id
+           WHERE bw.benutzer_id = ? AND bw.antwort = 'ja' AND sb.terminserie_id = ?`
+        )
+        .get(benutzerId, s.id) as { c: number }
+    ).c;
+    return {
+      terminserieId: s.id,
+      bezeichnung: s.bezeichnung,
+      mindestZusagen,
+      zusagenAnzahl,
+      erfuellt: zusagenAnzahl >= mindestZusagen,
+    };
+  });
 }
 
-export function istVollstaendig(zusagenAnzahl: number, minBloecke: number | null): boolean {
-  return !minBloecke || zusagenAnzahl >= minBloecke;
+// Ohne konfigurierte Vorgaben gilt die alte, einfache Regel: irgendeine Antwort genuegt.
+// Sobald mind. eine Vorgabe existiert, muessen alle erfuellt sein.
+export function istVollstaendig(vorgaben: Vorgabe[], abgegebenAm: string | null): boolean {
+  if (vorgaben.length === 0) return !!abgegebenAm;
+  return vorgaben.every((v) => v.erfuellt);
 }
 
 // Baut die Rasteransicht (Konzept Kap. 3.2) fuer eine Jahresabfrage. requesterBenutzerId/istPlaner
@@ -103,15 +136,15 @@ export function baueRaster(
         zellen[b.id] = { antwort: bw?.antwort ?? "", gesperrt, grund };
       }
     }
-    const zusagenAnzahl = t.benutzer_id ? zaehleZusagen(ausschreibungId, t.benutzer_id) : 0;
+    const vorgaben = t.benutzer_id ? ladeVorgabenStatus(ausschreibungId, t.id, t.benutzer_id) : [];
     return {
       teilnehmerId: t.id,
       benutzerId: t.benutzer_id,
       name: t.name,
       wunschAnzahl: t.wunsch_anzahl,
       abgegebenAm: t.abgegeben_am,
-      zusagenAnzahl,
-      vollstaendig: istVollstaendig(zusagenAnzahl, ausschreibung.min_bloecke),
+      vorgaben,
+      vollstaendig: istVollstaendig(vorgaben, t.abgegeben_am),
       versteckt: !zeigeAlle && !istEigeneZeile,
       zellen,
     };

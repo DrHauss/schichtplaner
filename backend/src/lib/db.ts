@@ -172,6 +172,17 @@ CREATE TABLE IF NOT EXISTS abfrage_teilnehmer (
   abgegeben_am     TEXT,
   UNIQUE(ausschreibung_id, name)
 );
+
+-- Mindestanzahl Zusagen kann je Terminserie vom Standard (terminserie.mindest_zusagen)
+-- abweichen -- z. B. weniger Nachtschichten fuer Teilzeitkraefte. Ohne Eintrag hier gilt
+-- der Standard der Serie.
+CREATE TABLE IF NOT EXISTS terminserie_mindestzusagen (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  terminserie_id  INTEGER NOT NULL REFERENCES terminserie(id) ON DELETE CASCADE,
+  teilnehmer_id   INTEGER NOT NULL REFERENCES abfrage_teilnehmer(id) ON DELETE CASCADE,
+  mindest_zusagen INTEGER NOT NULL,
+  UNIQUE(terminserie_id, teilnehmer_id)
+);
 `);
 
 // SQLite erlaubt bei ALTER TABLE ... ADD COLUMN weder UNIQUE- noch PRIMARY-KEY-Constraints;
@@ -197,3 +208,7 @@ ensureColumn("bewerbung", "geaendert_am", "TEXT");
 
 ensureColumn("schichtblock", "terminserie_id", "INTEGER REFERENCES terminserie(id) ON DELETE CASCADE");
 ensureColumn("schichtblock", "datum_sort", "TEXT");
+
+// Mindestanzahl Zusagen gilt je Terminserie (Block-Kategorie), nicht pauschal fuer die ganze
+// Jahresabfrage -- z. B. "mind. 3 Wochenende Fruehschicht" und getrennt "mind. 2 Nachtschicht-4er".
+ensureColumn("terminserie", "mindest_zusagen", "INTEGER");
