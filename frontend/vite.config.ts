@@ -5,6 +5,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     port: 5173,
+    allowedHosts: ["schichtplan.zoich.de"],
     proxy: {
       "/api": "http://localhost:4000",
     },

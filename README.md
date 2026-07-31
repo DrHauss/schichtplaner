@@ -16,7 +16,23 @@ Webbasierte Schichtplanungsumgebung gemäß dem Konzept „Webbasierte Schichtpl
 - **Mitarbeiter-Selbstansicht:** „Mein Plan" mit veröffentlichten Schichten, iCal-Export (`/api/mein/plan.ics`)
 - **Auth:** E-Mail/Passwort mit JWT (Platzhalter für spätere SSO-Anbindung an Microsoft Entra ID)
 
-Nicht enthaltene Ausbaustufen (siehe Konzept Kap. 8): Schichttausch, Verfügbarkeiten/Wunschfrei, automatische Vergabe, Stundenkonten/Zuschlagsauswertung, Web-Push, PWA, Lohn-/Zeiterfassungs-Schnittstellen.
+## Jahresabfrage (Konzept-Ergänzung, Ablösung der Framadate-/STUdS-Umfrage)
+
+Umsetzung von [`docs/Konzept_Jahresabfrage.md`](docs/Konzept_Jahresabfrage.md), Kap. 3 (`backend/src/routes/jahresabfrage.ts`, `abfrage.ts`, `frontend/src/pages/JahresabfragePage.tsx`, `AbfrageTokenPage.tsx`):
+
+- **Termingenerator:** Serienregeln (wöchentlich, monatlich per n-tem Wochentag, gesetzliche Feiertage NRW inkl. beweglicher Feiertage, Einzeltermine) erzeugen mit Vorschau die Termine eines Jahres; Gruppierung zu Wochenend-Blöcken statt Einzelschichten möglich (`backend/src/lib/terminserie.ts`, `feiertage.ts`)
+- **Rasteransicht:** Personen × Termine mit Ja/Wenn nötig/Nein, Bedarfszeile und Ampel je Termin, gesperrte Zellen bei genehmigter Abwesenheit; eigene Antworten zusätzlich als Terminliste mit drei großen Schaltflächen (Mobil-/Teilnehmeransicht)
+- **Zugang per Link ohne Login:** persönliches Token je Teilnehmer, eigener unauthentifizierter Router mit Rate-Limit (`/api/abfrage/:token`, Seite `/abfrage/:token`)
+- **Frist-Automatik:** automatisches Schließen nach Ablauf, automatische Erinnerung 14 Tage und 48 h vor Fristende, Fortschrittsanzeige mit Engpass-Ampel je Termin (`backend/src/lib/scheduler.ts`)
+- **Vergabevorschlag:** knappste Termine zuerst, „Ja" vor „Wenn nötig", Ausgleich über Wunschanzahl und Vorjahreshistorie, reproduzierbarer seed-basierter Tie-Break statt Zufall; Übernahme läuft über den bestehenden Vergabe-Endpunkt der Schichtbörse
+- CSV-Export des Rasters
+
+## Konzepte
+
+- [`docs/Konzept_Webbasierte_Schichtplanung.md`](docs/Konzept_Webbasierte_Schichtplanung.md) – Gesamtkonzept (Grundlage des MVP)
+- [`docs/Konzept_Jahresabfrage.md`](docs/Konzept_Jahresabfrage.md) – Jahresplanung über eine Schichtabfrage
+
+Nicht enthaltene Ausbaustufen (siehe Konzept Kap. 8 bzw. Konzept Jahresabfrage Kap. 10): Schichttausch, Verfügbarkeiten/Wunschfrei, vollautomatische Vergabe ohne Freigabe, Stundenkonten/Zuschlagsauswertung, Web-Push, PWA, Lohn-/Zeiterfassungs-Schnittstellen, Framadate-CSV-Import und Nachabfrage.
 
 ## Lokale Entwicklung
 
@@ -45,7 +61,7 @@ npm run dev    # SPA auf http://localhost:5173 (Proxy auf /api -> Backend)
 
 ## Datenmodell
 
-Die SQLite-Tabellen in `backend/src/lib/db.ts` setzen das vereinfachte Datenmodell aus Konzept-Kapitel 5 direkt um (`mitarbeiter` → `benutzer`, `schicht_zuweisung`, `ausschreibung`, `schichtblock`, `blockschicht`, `bewerbung`, `vergabe_protokoll`, `benachrichtigung` usw.).
+Die SQLite-Tabellen in `backend/src/lib/db.ts` setzen das vereinfachte Datenmodell aus Konzept-Kapitel 5 direkt um (`mitarbeiter` → `benutzer`, `schicht_zuweisung`, `ausschreibung`, `schichtblock`, `blockschicht`, `bewerbung`, `vergabe_protokoll`, `benachrichtigung` usw.). Die Jahresabfrage erweitert `ausschreibung`/`bewerbung` um wenige Spalten (`typ`, `zeitraum_von/bis`, `antwort`, …) statt neue Kernobjekte einzuführen und ergänzt `terminserie` sowie `abfrage_teilnehmer`.
 
 ## Regelwerk
 

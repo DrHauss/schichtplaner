@@ -144,4 +144,56 @@ CREATE TABLE IF NOT EXISTS benachrichtigung (
   gelesen_am TEXT,
   erstellt_am TEXT DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Serienregeln fuer den Termingenerator der Jahresabfrage (Konzept Kap. 3.1)
+CREATE TABLE IF NOT EXISTS terminserie (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  ausschreibung_id INTEGER NOT NULL REFERENCES ausschreibung(id) ON DELETE CASCADE,
+  bezeichnung      TEXT NOT NULL,
+  regel            TEXT NOT NULL,
+  schichtart_ids   TEXT NOT NULL,
+  personen_bedarf  INTEGER NOT NULL DEFAULT 1,
+  qualifikation_id INTEGER REFERENCES qualifikation(id),
+  ausnahmen        TEXT,
+  erstellt_am      TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Teilnehmerkreis einer Jahresabfrage: entkoppelt "wer ist eingeladen" von Login/Mitgliedschaft (Konzept Kap. 3.3)
+CREATE TABLE IF NOT EXISTS abfrage_teilnehmer (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  ausschreibung_id INTEGER NOT NULL REFERENCES ausschreibung(id) ON DELETE CASCADE,
+  benutzer_id      INTEGER REFERENCES benutzer(id) ON DELETE SET NULL,
+  name             TEXT NOT NULL,
+  email            TEXT,
+  token            TEXT UNIQUE,
+  wunsch_anzahl    INTEGER,
+  eingeladen_am    TEXT,
+  erinnert_am      TEXT,
+  abgegeben_am     TEXT,
+  UNIQUE(ausschreibung_id, name)
+);
 `);
+
+// SQLite erlaubt bei ALTER TABLE ... ADD COLUMN weder UNIQUE- noch PRIMARY-KEY-Constraints;
+// neue Spalten werden daher nachtraeglich und idempotent ergaenzt (Konzept Kap. 5).
+function ensureColumn(table: string, column: string, definition: string) {
+  const spalten = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+  if (!spalten.some((s) => s.name === column)) {
+    db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
+
+ensureColumn("ausschreibung", "typ", "TEXT NOT NULL DEFAULT 'runde'");
+ensureColumn("ausschreibung", "zeitraum_von", "TEXT");
+ensureColumn("ausschreibung", "zeitraum_bis", "TEXT");
+ensureColumn("ausschreibung", "antwort_modus", "TEXT NOT NULL DEFAULT 'ja_nein'");
+ensureColumn("ausschreibung", "sichtbarkeit", "TEXT NOT NULL DEFAULT 'alle'");
+ensureColumn("ausschreibung", "zugang", "TEXT NOT NULL DEFAULT 'login'");
+ensureColumn("ausschreibung", "erinnerung_14_versendet", "INTEGER NOT NULL DEFAULT 0");
+ensureColumn("ausschreibung", "erinnerung_48h_versendet", "INTEGER NOT NULL DEFAULT 0");
+
+ensureColumn("bewerbung", "antwort", "TEXT NOT NULL DEFAULT 'ja'");
+ensureColumn("bewerbung", "geaendert_am", "TEXT");
+
+ensureColumn("schichtblock", "terminserie_id", "INTEGER REFERENCES terminserie(id) ON DELETE CASCADE");
+ensureColumn("schichtblock", "datum_sort", "TEXT");
