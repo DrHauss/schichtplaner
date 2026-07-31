@@ -87,6 +87,8 @@ body {
 .rolle-chip button { border: none; background: transparent; cursor: pointer; color: #94a3b8; font-weight: 700; padding: 0; }
 .rolle-chip button:hover { color: #dc2626; }
 
+.freischicht-hinweis { color: #cbd5e1; font-size: 0.8rem; font-style: italic; }
+
 /* Rasteransicht (Jahresabfrage) */
 .raster-scroll { overflow-x: auto; }
 .raster-matrix { white-space: nowrap; }

@@ -209,6 +209,23 @@ CREATE TABLE IF NOT EXISTS gruppe_mindestzusagen (
   mindest_zusagen INTEGER NOT NULL,
   UNIQUE(gruppe_id, teilnehmer_id)
 );
+
+-- Wiederverwendbare Schichtblock-Vorlage fuer die direkte Zuweisung in der Plantafel (Top-down),
+-- unabhaengig von einer Ausschreibung/Jahresabfrage -- z. B. "Wochenende Fruehschicht" (Tag 0+1)
+-- oder "Nachtschicht 3er Block" (Tag 0,1,2). Ein Eintrag je enthaltenem Tag-Versatz + Schichtart.
+CREATE TABLE IF NOT EXISTS schichtblock_vorlage (
+  id               INTEGER PRIMARY KEY AUTOINCREMENT,
+  planungseinheit_id INTEGER NOT NULL REFERENCES planungseinheit(id) ON DELETE CASCADE,
+  bezeichnung      TEXT NOT NULL,
+  erstellt_am      TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS schichtblock_vorlage_eintrag (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  vorlage_id      INTEGER NOT NULL REFERENCES schichtblock_vorlage(id) ON DELETE CASCADE,
+  tag_offset      INTEGER NOT NULL,
+  schichtart_id   INTEGER NOT NULL REFERENCES schichtart(id) ON DELETE CASCADE
+);
 `);
 
 // SQLite erlaubt bei ALTER TABLE ... ADD COLUMN weder UNIQUE- noch PRIMARY-KEY-Constraints;
@@ -238,3 +255,8 @@ ensureColumn("schichtblock", "datum_sort", "TEXT");
 // Mindestanzahl Zusagen gilt je Terminserie (Block-Kategorie), nicht pauschal fuer die ganze
 // Jahresabfrage -- z. B. "mind. 3 Wochenende Fruehschicht" und getrennt "mind. 2 Nachtschicht-4er".
 ensureColumn("terminserie", "mindest_zusagen", "INTEGER");
+
+// Unterscheidet normale Dienst-Schichtarten von Abwesenheitsschichten (Krankheit, Urlaub, ...).
+// Abwesenheitsschichten werden wie normale Schichten der Plantafel zugewiesen, loesen aber keine
+// ArbZG-Konfliktpruefung (Ruhezeit) aus -- siehe regelwerk.ts.
+ensureColumn("schichtart", "kategorie", "TEXT NOT NULL DEFAULT 'dienst'");

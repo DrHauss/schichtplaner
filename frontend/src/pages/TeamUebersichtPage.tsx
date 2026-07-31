@@ -18,6 +18,7 @@ interface PlanungseinheitUebersicht {
   id: number;
   name: string;
   standort: string | null;
+  mitarbeiter: { id: number; name: string }[];
   zuweisungen: Zuweisung[];
 }
 
@@ -70,15 +71,14 @@ export default function TeamUebersichtPage() {
 
       {!loading &&
         einheiten.map((pe) => {
-          const mitarbeiterNamen = Array.from(new Set(pe.zuweisungen.map((z) => z.mitarbeiterName))).sort();
           return (
             <section key={pe.id}>
               <h2>
                 {pe.name}
                 {pe.standort && <span className="hint"> · {pe.standort}</span>}
               </h2>
-              {mitarbeiterNamen.length === 0 ? (
-                <p className="empty">Keine veröffentlichten Schichten in dieser Woche.</p>
+              {pe.mitarbeiter.length === 0 ? (
+                <p className="empty">Keine Mitarbeiter in diesem Team.</p>
               ) : (
                 <table className="table plantafel">
                   <thead>
@@ -90,18 +90,22 @@ export default function TeamUebersichtPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {mitarbeiterNamen.map((name) => (
-                      <tr key={name}>
-                        <td>{name}</td>
+                    {pe.mitarbeiter.map((m) => (
+                      <tr key={m.id}>
+                        <td>{m.name}</td>
                         {tage.map((t) => {
-                          const treffer = pe.zuweisungen.filter((z) => z.mitarbeiterName === name && z.datum === t);
+                          const treffer = pe.zuweisungen.filter((z) => z.benutzerId === m.id && z.datum === t);
                           return (
                             <td key={t}>
-                              {treffer.map((z) => (
-                                <span key={z.id} className="badge" style={{ background: z.farbe }} title={`${z.bezeichnung} (${z.beginn}–${z.ende})`}>
-                                  {z.kuerzel}
-                                </span>
-                              ))}
+                              {treffer.length > 0 ? (
+                                treffer.map((z) => (
+                                  <span key={z.id} className="badge" style={{ background: z.farbe }} title={`${z.bezeichnung} (${z.beginn}–${z.ende})`}>
+                                    {z.kuerzel}
+                                  </span>
+                                ))
+                              ) : (
+                                <span className="freischicht-hinweis">Freischicht</span>
+                              )}
                             </td>
                           );
                         })}

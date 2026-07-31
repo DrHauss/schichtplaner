@@ -75,16 +75,30 @@ stammdatenRouter.get("/planungseinheiten/:id/schichtarten", (req, res) => {
 });
 
 stammdatenRouter.post("/planungseinheiten/:id/schichtarten", requirePlaner("id"), (req, res) => {
-  const { kuerzel, bezeichnung, farbe, beginn, ende, pauseMin, stundenwert, zuschlagsart } = req.body ?? {};
+  const { kuerzel, bezeichnung, farbe, beginn, ende, pauseMin, stundenwert, zuschlagsart, kategorie } = req.body ?? {};
   if (!kuerzel || !bezeichnung || !beginn || !ende) {
     return res.status(400).json({ error: "kuerzel, bezeichnung, beginn, ende erforderlich" });
   }
+  if (kategorie && !["dienst", "abwesenheit"].includes(kategorie)) {
+    return res.status(400).json({ error: "kategorie muss 'dienst' oder 'abwesenheit' sein" });
+  }
   const info = db
     .prepare(
-      `INSERT INTO schichtart (planungseinheit_id, kuerzel, bezeichnung, farbe, beginn, ende, pause_min, stundenwert, zuschlagsart)
-       VALUES (?,?,?,?,?,?,?,?,?)`
+      `INSERT INTO schichtart (planungseinheit_id, kuerzel, bezeichnung, farbe, beginn, ende, pause_min, stundenwert, zuschlagsart, kategorie)
+       VALUES (?,?,?,?,?,?,?,?,?,?)`
     )
-    .run(req.params.id, kuerzel, bezeichnung, farbe ?? "#3b82f6", beginn, ende, pauseMin ?? 0, stundenwert ?? null, zuschlagsart ?? null);
+    .run(
+      req.params.id,
+      kuerzel,
+      bezeichnung,
+      farbe ?? "#3b82f6",
+      beginn,
+      ende,
+      pauseMin ?? 0,
+      stundenwert ?? null,
+      zuschlagsart ?? null,
+      kategorie ?? "dienst"
+    );
   res.status(201).json({ id: info.lastInsertRowid });
 });
 
@@ -96,13 +110,78 @@ stammdatenRouter.put("/schichtarten/:id", (req: AuthedRequest, res) => {
   if (!istPlanerFuerPlanungseinheit(req, schichtart.planungseinheit_id)) {
     return res.status(403).json({ error: "Keine Planer-Berechtigung fuer diese Planungseinheit" });
   }
-  const { kuerzel, bezeichnung, farbe, beginn, ende, pauseMin, stundenwert, zuschlagsart } = req.body ?? {};
+  const { kuerzel, bezeichnung, farbe, beginn, ende, pauseMin, stundenwert, zuschlagsart, kategorie } = req.body ?? {};
   if (!kuerzel || !bezeichnung || !beginn || !ende) {
     return res.status(400).json({ error: "kuerzel, bezeichnung, beginn, ende erforderlich" });
   }
+  if (kategorie && !["dienst", "abwesenheit"].includes(kategorie)) {
+    return res.status(400).json({ error: "kategorie muss 'dienst' oder 'abwesenheit' sein" });
+  }
   db.prepare(
-    `UPDATE schichtart SET kuerzel=?, bezeichnung=?, farbe=?, beginn=?, ende=?, pause_min=?, stundenwert=?, zuschlagsart=? WHERE id=?`
-  ).run(kuerzel, bezeichnung, farbe ?? "#3b82f6", beginn, ende, pauseMin ?? 0, stundenwert ?? null, zuschlagsart ?? null, req.params.id);
+    `UPDATE schichtart SET kuerzel=?, bezeichnung=?, farbe=?, beginn=?, ende=?, pause_min=?, stundenwert=?, zuschlagsart=?, kategorie=? WHERE id=?`
+  ).run(
+    kuerzel,
+    bezeichnung,
+    farbe ?? "#3b82f6",
+    beginn,
+    ende,
+    pauseMin ?? 0,
+    stundenwert ?? null,
+    zuschlagsart ?? null,
+    kategorie ?? "dienst",
+    req.params.id
+  );
+  res.json({ ok: true });
+});
+
+// Schichtblock-Vorlagen: wiederverwendbare Muster (z. B. "Wochenende Fruehschicht", "Nachtschicht
+// 3er Block") fuer die direkte Top-down-Zuweisung in der Plantafel (siehe routes/plantafel.ts).
+stammdatenRouter.get("/planungseinheiten/:id/schichtblock-vorlagen", (req, res) => {
+  const vorlagen = db
+    .prepare("SELECT * FROM schichtblock_vorlage WHERE planungseinheit_id = ? ORDER BY bezeichnung")
+    .all(req.params.id) as any[];
+  const mitEintraegen = vorlagen.map((v) => {
+    const eintraege = db
+      .prepare(
+        `SELECT e.id, e.tag_offset, e.schichtart_id, sa.kuerzel, sa.bezeichnung as schichtart_bezeichnung
+         FROM schichtblock_vorlage_eintrag e JOIN schichtart sa ON sa.id = e.schichtart_id
+         WHERE e.vorlage_id = ? ORDER BY e.tag_offset`
+      )
+      .all(v.id);
+    return { ...v, eintraege };
+  });
+  res.json(mitEintraegen);
+});
+
+stammdatenRouter.post("/planungseinheiten/:id/schichtblock-vorlagen", requirePlaner("id"), (req, res) => {
+  const { bezeichnung, eintraege } = (req.body ?? {}) as {
+    bezeichnung: string;
+    eintraege: { tagOffset: number; schichtartId: number }[];
+  };
+  if (!bezeichnung || !Array.isArray(eintraege) || eintraege.length === 0) {
+    return res.status(400).json({ error: "bezeichnung und eintraege[] erforderlich" });
+  }
+  const ergebnis = db.transaction(() => {
+    const info = db
+      .prepare("INSERT INTO schichtblock_vorlage (planungseinheit_id, bezeichnung) VALUES (?,?)")
+      .run(req.params.id, bezeichnung);
+    const vorlageId = info.lastInsertRowid;
+    const insertEintrag = db.prepare("INSERT INTO schichtblock_vorlage_eintrag (vorlage_id, tag_offset, schichtart_id) VALUES (?,?,?)");
+    for (const e of eintraege) insertEintrag.run(vorlageId, e.tagOffset, e.schichtartId);
+    return vorlageId;
+  })();
+  res.status(201).json({ id: ergebnis });
+});
+
+stammdatenRouter.delete("/schichtblock-vorlagen/:id", (req: AuthedRequest, res) => {
+  const vorlage = db.prepare("SELECT planungseinheit_id FROM schichtblock_vorlage WHERE id = ?").get(req.params.id) as
+    | { planungseinheit_id: number }
+    | undefined;
+  if (!vorlage) return res.status(404).json({ error: "Vorlage nicht gefunden" });
+  if (!istPlanerFuerPlanungseinheit(req, vorlage.planungseinheit_id)) {
+    return res.status(403).json({ error: "Keine Planer-Berechtigung fuer diese Planungseinheit" });
+  }
+  db.prepare("DELETE FROM schichtblock_vorlage WHERE id = ?").run(req.params.id);
   res.json({ ok: true });
 });
 
