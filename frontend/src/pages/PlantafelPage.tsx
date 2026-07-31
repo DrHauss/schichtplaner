@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
+import { formatDatum } from "../lib/datum";
 
 interface Mitarbeiter {
   id: number;
@@ -124,7 +125,7 @@ export default function PlantafelPage() {
         )}
         <button onClick={() => setWoche((w) => new Date(w.getTime() - 7 * 86400000))}>← Vorwoche</button>
         <span>
-          {tage[0]} – {tage[6]}
+          {formatDatum(tage[0])} – {formatDatum(tage[6])}
         </span>
         <button onClick={() => setWoche((w) => new Date(w.getTime() + 7 * 86400000))}>Nächste Woche →</button>
         <button onClick={veroeffentlichen}>Plan veröffentlichen</button>
@@ -136,7 +137,7 @@ export default function PlantafelPage() {
           <tr>
             <th>Mitarbeiter</th>
             {tage.map((t) => (
-              <th key={t}>{t.slice(5)}</th>
+              <th key={t}>{formatDatum(t).slice(0, 5)}</th>
             ))}
           </tr>
         </thead>

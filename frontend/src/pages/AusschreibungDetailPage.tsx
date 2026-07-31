@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
+import { formatDatum } from "../lib/datum";
 
 interface Schicht {
   datum: string;
@@ -130,7 +131,7 @@ export default function AusschreibungDetailPage() {
             <ul className="schicht-list">
               {b.schichten.map((s, i) => (
                 <li key={i}>
-                  {s.datum} · {s.kuerzel} ({s.beginn}–{s.ende})
+                  {formatDatum(s.datum)} · {s.kuerzel} ({s.beginn}–{s.ende})
                 </li>
               ))}
             </ul>

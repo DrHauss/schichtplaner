@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { db } from "../lib/db";
 import { requireAuth, requirePlaner, AuthedRequest } from "../middleware/auth";
+import { istPlanerFuerPlanungseinheit } from "../lib/berechtigung";
 
 export const stammdatenRouter = Router();
 stammdatenRouter.use(requireAuth);
@@ -63,6 +64,11 @@ stammdatenRouter.post("/planungseinheiten/:id/mitglieder", requirePlaner("id"), 
   res.status(201).json({ ok: true });
 });
 
+stammdatenRouter.delete("/planungseinheiten/:id/mitglieder/:mitgliedschaftId", requirePlaner("id"), (req, res) => {
+  db.prepare("DELETE FROM mitgliedschaft WHERE id = ? AND planungseinheit_id = ?").run(req.params.mitgliedschaftId, req.params.id);
+  res.json({ ok: true });
+});
+
 // Schichtarten
 stammdatenRouter.get("/planungseinheiten/:id/schichtarten", (req, res) => {
   res.json(db.prepare("SELECT * FROM schichtart WHERE planungseinheit_id = ?").all(req.params.id));
@@ -80,6 +86,24 @@ stammdatenRouter.post("/planungseinheiten/:id/schichtarten", requirePlaner("id")
     )
     .run(req.params.id, kuerzel, bezeichnung, farbe ?? "#3b82f6", beginn, ende, pauseMin ?? 0, stundenwert ?? null, zuschlagsart ?? null);
   res.status(201).json({ id: info.lastInsertRowid });
+});
+
+stammdatenRouter.put("/schichtarten/:id", (req: AuthedRequest, res) => {
+  const schichtart = db.prepare("SELECT planungseinheit_id FROM schichtart WHERE id = ?").get(req.params.id) as
+    | { planungseinheit_id: number }
+    | undefined;
+  if (!schichtart) return res.status(404).json({ error: "Schichtart nicht gefunden" });
+  if (!istPlanerFuerPlanungseinheit(req, schichtart.planungseinheit_id)) {
+    return res.status(403).json({ error: "Keine Planer-Berechtigung fuer diese Planungseinheit" });
+  }
+  const { kuerzel, bezeichnung, farbe, beginn, ende, pauseMin, stundenwert, zuschlagsart } = req.body ?? {};
+  if (!kuerzel || !bezeichnung || !beginn || !ende) {
+    return res.status(400).json({ error: "kuerzel, bezeichnung, beginn, ende erforderlich" });
+  }
+  db.prepare(
+    `UPDATE schichtart SET kuerzel=?, bezeichnung=?, farbe=?, beginn=?, ende=?, pause_min=?, stundenwert=?, zuschlagsart=? WHERE id=?`
+  ).run(kuerzel, bezeichnung, farbe ?? "#3b82f6", beginn, ende, pauseMin ?? 0, stundenwert ?? null, zuschlagsart ?? null, req.params.id);
+  res.json({ ok: true });
 });
 
 // Besetzungsbedarf

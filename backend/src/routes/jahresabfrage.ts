@@ -3,7 +3,7 @@ import { db } from "../lib/db";
 import { requireAuth, requirePlaner, AuthedRequest } from "../middleware/auth";
 import { requirePlanerFuerAusschreibung, istPlanerFuerPlanungseinheit } from "../lib/berechtigung";
 import { berechneTermine, gruppiere, schichtartFuerDatum, Regel, Ausnahme, Gruppierung } from "../lib/terminserie";
-import { baueRaster, schreibeAntworten, legeTeilnehmerAn, erinnereAusstehende } from "../lib/jahresabfrage";
+import { baueRaster, schreibeAntworten, legeTeilnehmerAn, erinnereAusstehende, zaehleZusagen, istVollstaendig } from "../lib/jahresabfrage";
 import { berechneVergabevorschlag } from "../lib/vergabevorschlag";
 import { benachrichtige } from "../lib/notify";
 
@@ -13,15 +13,15 @@ jahresabfrageRouter.use(requireAuth);
 // --- Anlegen ---
 
 jahresabfrageRouter.post("/planungseinheiten/:id/jahresabfragen", requirePlaner("id"), (req: AuthedRequest, res) => {
-  const { titel, zeitraumVon, zeitraumBis, bewerbungsfrist, antwortModus, sichtbarkeit, zugang } = req.body ?? {};
+  const { titel, zeitraumVon, zeitraumBis, bewerbungsfrist, antwortModus, sichtbarkeit, zugang, mindestZusagen } = req.body ?? {};
   if (!titel || !zeitraumVon || !zeitraumBis || !bewerbungsfrist) {
     return res.status(400).json({ error: "titel, zeitraumVon, zeitraumBis, bewerbungsfrist erforderlich" });
   }
   const info = db
     .prepare(
       `INSERT INTO ausschreibung
-         (titel, planungseinheit_id, bewerbungsfrist, vergabeverfahren, typ, zeitraum_von, zeitraum_bis, antwort_modus, sichtbarkeit, zugang)
-       VALUES (?,?,?,?,?,?,?,?,?,?)`
+         (titel, planungseinheit_id, bewerbungsfrist, vergabeverfahren, typ, zeitraum_von, zeitraum_bis, antwort_modus, sichtbarkeit, zugang, min_bloecke)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)`
     )
     .run(
       titel,
@@ -33,7 +33,8 @@ jahresabfrageRouter.post("/planungseinheiten/:id/jahresabfragen", requirePlaner(
       zeitraumBis,
       antwortModus ?? "ja_wennnoetig_nein",
       sichtbarkeit ?? "alle",
-      zugang ?? "link_persoenlich"
+      zugang ?? "link_persoenlich",
+      mindestZusagen ?? null
     );
   res.status(201).json({ id: info.lastInsertRowid });
 });
@@ -202,10 +203,17 @@ jahresabfrageRouter.post("/ausschreibungen/:id/erinnern", (req: AuthedRequest, r
 
 jahresabfrageRouter.get("/ausschreibungen/:id/fortschritt", (req: AuthedRequest, res) => {
   if (!requirePlanerFuerAusschreibung(req, res, req.params.id)) return;
+  const ausschreibung = db.prepare("SELECT min_bloecke FROM ausschreibung WHERE id = ?").get(req.params.id) as
+    | { min_bloecke: number | null }
+    | undefined;
   const teilnehmer = db
-    .prepare("SELECT id, name, abgegeben_am, erinnert_am FROM abfrage_teilnehmer WHERE ausschreibung_id = ?")
+    .prepare("SELECT id, name, benutzer_id FROM abfrage_teilnehmer WHERE ausschreibung_id = ?")
     .all(req.params.id) as any[];
-  const ausstehend = teilnehmer.filter((t) => !t.abgegeben_am);
+  const mitStatus = teilnehmer.map((t) => {
+    const zusagenAnzahl = t.benutzer_id ? zaehleZusagen(req.params.id, t.benutzer_id) : 0;
+    return { id: t.id, name: t.name, zusagenAnzahl, vollstaendig: istVollstaendig(zusagenAnzahl, ausschreibung?.min_bloecke ?? null) };
+  });
+  const ausstehend = mitStatus.filter((t) => !t.vollstaendig);
 
   const bloecke = db.prepare("SELECT * FROM schichtblock WHERE ausschreibung_id = ?").all(req.params.id) as any[];
   const engpaesse = bloecke
@@ -219,7 +227,13 @@ jahresabfrageRouter.get("/ausschreibungen/:id/fortschritt", (req: AuthedRequest,
     })
     .filter((e) => e.ampel !== "ok");
 
-  res.json({ gesamt: teilnehmer.length, abgegeben: teilnehmer.length - ausstehend.length, ausstehend, engpaesse });
+  res.json({
+    gesamt: teilnehmer.length,
+    abgegeben: mitStatus.length - ausstehend.length,
+    mindestZusagen: ausschreibung?.min_bloecke ?? null,
+    ausstehend,
+    engpaesse,
+  });
 });
 
 // --- Vergabevorschlag ---

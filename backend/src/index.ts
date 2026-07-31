@@ -9,6 +9,7 @@ import { benachrichtigungenRouter } from "./routes/benachrichtigungen";
 import { meinRouter } from "./routes/mein";
 import { jahresabfrageRouter } from "./routes/jahresabfrage";
 import { abfrageRouter } from "./routes/abfrage";
+import { benutzerRouter } from "./routes/benutzer";
 import { pruefeFristenUndErinnerungen } from "./lib/scheduler";
 
 const app = express();
@@ -26,6 +27,7 @@ app.use("/api", stammdatenRouter);
 app.use("/api", plantafelRouter);
 app.use("/api", boerseRouter);
 app.use("/api", jahresabfrageRouter);
+app.use("/api/benutzer", benutzerRouter);
 app.use("/api/benachrichtigungen", benachrichtigungenRouter);
 app.use("/api/mein", meinRouter);
 

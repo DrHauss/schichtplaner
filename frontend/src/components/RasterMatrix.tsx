@@ -1,3 +1,5 @@
+import { formatDatum } from "../lib/datum";
+
 export interface RasterSpalte {
   schichtblockId: number;
   bezeichnung: string;
@@ -18,6 +20,8 @@ export interface RasterZeile {
   name: string;
   wunschAnzahl: number | null;
   abgegebenAm: string | null;
+  zusagenAnzahl: number;
+  vollstaendig: boolean;
   versteckt: boolean;
   zellen: Record<number, RasterZelle>;
 }
@@ -36,7 +40,17 @@ function ampel(summe: { ja: number; wenn_noetig: number; nein: number } | undefi
 // Rasteransicht Personen x Termine, wie von der bisherigen Framadate-/STUdS-Umfrage bekannt:
 // Summenzeile je Termin plus Bedarfszeile mit Ampel (Konzept Kap. 3.2). Reine Uebersicht fuer
 // den Planer -- die eigene Antwort wird ueber die Terminliste erfasst.
-export default function RasterMatrix({ spalten, zeilen, summen }: { spalten: RasterSpalte[]; zeilen: RasterZeile[]; summen: RasterSummen }) {
+export default function RasterMatrix({
+  spalten,
+  zeilen,
+  summen,
+  mindestZusagen,
+}: {
+  spalten: RasterSpalte[];
+  zeilen: RasterZeile[];
+  summen: RasterSummen;
+  mindestZusagen?: number | null;
+}) {
   return (
     <div className="raster-scroll">
       <table className="table raster-matrix">
@@ -44,7 +58,7 @@ export default function RasterMatrix({ spalten, zeilen, summen }: { spalten: Ras
           <tr>
             <th>Name</th>
             {spalten.map((s) => (
-              <th key={s.schichtblockId} title={s.schichten.map((sch) => `${sch.datum} ${sch.kuerzel}`).join(", ")}>
+              <th key={s.schichtblockId} title={s.schichten.map((sch) => `${formatDatum(sch.datum)} ${sch.kuerzel}`).join(", ")}>
                 {s.bezeichnung}
               </th>
             ))}
@@ -61,7 +75,9 @@ export default function RasterMatrix({ spalten, zeilen, summen }: { spalten: Ras
             <tr key={z.teilnehmerId}>
               <td>
                 {z.name}
-                {!z.abgegebenAm && <span className="hint"> · offen</span>}
+                {!z.vollstaendig && (
+                  <span className="hint"> · unvollständig{mindestZusagen ? ` (${z.zusagenAnzahl}/${mindestZusagen})` : ""}</span>
+                )}
               </td>
               {spalten.map((s) => {
                 const zelle = z.zellen[s.schichtblockId];
