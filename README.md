@@ -16,6 +16,11 @@ Webbasierte Schichtplanungsumgebung gemäß dem Konzept „Webbasierte Schichtpl
 - **Mitarbeiter-Selbstansicht:** „Mein Plan" mit veröffentlichten Schichten, iCal-Export (`/api/mein/plan.ics`)
 - **Auth:** E-Mail/Passwort mit JWT (Platzhalter für spätere SSO-Anbindung an Microsoft Entra ID)
 
+## Konzepte
+
+- [`docs/Konzept_Webbasierte_Schichtplanung.md`](docs/Konzept_Webbasierte_Schichtplanung.md) – Gesamtkonzept (Grundlage des MVP)
+- [`docs/Konzept_Jahresabfrage.md`](docs/Konzept_Jahresabfrage.md) – Jahresplanung über eine Schichtabfrage: Ablösung der bisherigen Framadate-/STUdS-Umfrage durch Rasteransicht, Zugang per Link ohne Login, Termingenerator und Vergabevorschlag
+
 Nicht enthaltene Ausbaustufen (siehe Konzept Kap. 8): Schichttausch, Verfügbarkeiten/Wunschfrei, automatische Vergabe, Stundenkonten/Zuschlagsauswertung, Web-Push, PWA, Lohn-/Zeiterfassungs-Schnittstellen.
 
 ## Lokale Entwicklung
