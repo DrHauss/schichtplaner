@@ -183,6 +183,109 @@ jahresabfrageRouter.put("/ausschreibungen/:id/terminserien/:sid/mindestzusagen/:
   res.json({ ok: true });
 });
 
+// --- Gruppen: mehrere Terminserien mit gemeinsamer Mindestanzahl (z. B. "Wochenenddienste" aus
+// Fruehschicht + Spaetschicht, mind. 3 Zusagen insgesamt) ---
+
+jahresabfrageRouter.get("/ausschreibungen/:id/gruppen", (req: AuthedRequest, res) => {
+  if (!requirePlanerFuerAusschreibung(req, res, req.params.id)) return;
+  const gruppen = db
+    .prepare("SELECT * FROM terminserie_gruppe WHERE ausschreibung_id = ? ORDER BY erstellt_am")
+    .all(req.params.id) as any[];
+  const mitMitgliedern = gruppen.map((g) => {
+    const mitglieder = db
+      .prepare(
+        `SELECT t.id, t.bezeichnung FROM terminserie_gruppe_mitglied m JOIN terminserie t ON t.id = m.terminserie_id
+         WHERE m.gruppe_id = ? ORDER BY t.bezeichnung`
+      )
+      .all(g.id) as { id: number; bezeichnung: string }[];
+    return { ...g, mitglieder };
+  });
+  res.json(mitMitgliedern);
+});
+
+jahresabfrageRouter.post("/ausschreibungen/:id/gruppen", (req: AuthedRequest, res) => {
+  if (!requirePlanerFuerAusschreibung(req, res, req.params.id)) return;
+  const { bezeichnung, terminserieIds, mindestZusagen } = (req.body ?? {}) as {
+    bezeichnung: string;
+    terminserieIds: number[];
+    mindestZusagen?: number;
+  };
+  if (!bezeichnung || !Array.isArray(terminserieIds) || terminserieIds.length < 2) {
+    return res.status(400).json({ error: "bezeichnung und mindestens zwei terminserieIds erforderlich" });
+  }
+  const gueltig = db
+    .prepare(
+      `SELECT COUNT(*) c FROM terminserie WHERE ausschreibung_id = ? AND id IN (${terminserieIds.map(() => "?").join(",")})`
+    )
+    .get(req.params.id, ...terminserieIds) as { c: number };
+  if (gueltig.c !== terminserieIds.length) {
+    return res.status(400).json({ error: "Terminserien gehoeren nicht zu dieser Jahresabfrage" });
+  }
+
+  const ergebnis = db.transaction(() => {
+    const info = db
+      .prepare("INSERT INTO terminserie_gruppe (ausschreibung_id, bezeichnung, mindest_zusagen) VALUES (?,?,?)")
+      .run(req.params.id, bezeichnung, mindestZusagen ?? null);
+    const gruppeId = info.lastInsertRowid;
+    const insertMitglied = db.prepare("INSERT INTO terminserie_gruppe_mitglied (gruppe_id, terminserie_id) VALUES (?,?)");
+    for (const sid of terminserieIds) insertMitglied.run(gruppeId, sid);
+    return gruppeId;
+  })();
+
+  res.status(201).json({ id: ergebnis });
+});
+
+jahresabfrageRouter.put("/ausschreibungen/:id/gruppen/:gid", (req: AuthedRequest, res) => {
+  if (!requirePlanerFuerAusschreibung(req, res, req.params.id)) return;
+  const { mindestZusagen } = req.body ?? {};
+  db.prepare("UPDATE terminserie_gruppe SET mindest_zusagen = ? WHERE id = ? AND ausschreibung_id = ?").run(
+    mindestZusagen === "" || mindestZusagen == null ? null : mindestZusagen,
+    req.params.gid,
+    req.params.id
+  );
+  res.json({ ok: true });
+});
+
+jahresabfrageRouter.delete("/ausschreibungen/:id/gruppen/:gid", (req: AuthedRequest, res) => {
+  if (!requirePlanerFuerAusschreibung(req, res, req.params.id)) return;
+  db.prepare("DELETE FROM terminserie_gruppe WHERE id = ? AND ausschreibung_id = ?").run(req.params.gid, req.params.id);
+  res.json({ ok: true });
+});
+
+jahresabfrageRouter.get("/ausschreibungen/:id/gruppen/:gid/mindestzusagen", (req: AuthedRequest, res) => {
+  if (!requirePlanerFuerAusschreibung(req, res, req.params.id)) return;
+  const gruppe = db.prepare("SELECT * FROM terminserie_gruppe WHERE id = ? AND ausschreibung_id = ?").get(req.params.gid, req.params.id) as
+    | { mindest_zusagen: number | null }
+    | undefined;
+  if (!gruppe) return res.status(404).json({ error: "Gruppe nicht gefunden" });
+  const teilnehmer = db.prepare("SELECT id, name FROM abfrage_teilnehmer WHERE ausschreibung_id = ? ORDER BY name").all(req.params.id) as {
+    id: number;
+    name: string;
+  }[];
+  const overrides = db
+    .prepare("SELECT teilnehmer_id, mindest_zusagen FROM gruppe_mindestzusagen WHERE gruppe_id = ?")
+    .all(req.params.gid) as { teilnehmer_id: number; mindest_zusagen: number }[];
+  const overrideMap = new Map(overrides.map((o) => [o.teilnehmer_id, o.mindest_zusagen]));
+  res.json({
+    standard: gruppe.mindest_zusagen,
+    teilnehmer: teilnehmer.map((t) => ({ teilnehmerId: t.id, name: t.name, override: overrideMap.get(t.id) ?? null })),
+  });
+});
+
+jahresabfrageRouter.put("/ausschreibungen/:id/gruppen/:gid/mindestzusagen/:teilnehmerId", (req: AuthedRequest, res) => {
+  if (!requirePlanerFuerAusschreibung(req, res, req.params.id)) return;
+  const { mindestZusagen } = req.body ?? {};
+  if (mindestZusagen === "" || mindestZusagen === null || mindestZusagen === undefined) {
+    db.prepare("DELETE FROM gruppe_mindestzusagen WHERE gruppe_id = ? AND teilnehmer_id = ?").run(req.params.gid, req.params.teilnehmerId);
+  } else {
+    db.prepare(
+      `INSERT INTO gruppe_mindestzusagen (gruppe_id, teilnehmer_id, mindest_zusagen) VALUES (?,?,?)
+       ON CONFLICT(gruppe_id, teilnehmer_id) DO UPDATE SET mindest_zusagen = excluded.mindest_zusagen`
+    ).run(req.params.gid, req.params.teilnehmerId, mindestZusagen);
+  }
+  res.json({ ok: true });
+});
+
 // --- Rasteransicht ---
 
 jahresabfrageRouter.get("/ausschreibungen/:id/raster", (req: AuthedRequest, res) => {

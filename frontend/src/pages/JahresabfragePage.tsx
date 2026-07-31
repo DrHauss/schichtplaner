@@ -49,6 +49,18 @@ interface Terminserie {
   mindest_zusagen: number | null;
 }
 
+interface Gruppe {
+  id: number;
+  bezeichnung: string;
+  mindest_zusagen: number | null;
+  mitglieder: { id: number; bezeichnung: string }[];
+}
+
+interface Uebersicht {
+  standard: number | null;
+  teilnehmer: { teilnehmerId: number; name: string; override: number | null }[];
+}
+
 interface VorschlagBlock {
   schichtblockId: number;
   bezeichnung: string;
@@ -60,6 +72,48 @@ interface VorschlagBlock {
 const WOCHENTAGE = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
 
 type Tab = "raster" | "generator" | "teilnehmer" | "fortschritt" | "vergabe";
+
+// Individuelle Mindestanzahl je Teilnehmer -- fuer eine einzelne Terminserie und fuer eine
+// Gruppe aus mehreren Serien identisch aufgebaut (Standard der Serie/Gruppe als Platzhalter,
+// ueberschreibbar je Person).
+function MindestzusagenTabelle({ uebersicht, onAendern }: { uebersicht: Uebersicht; onAendern: (teilnehmerId: number, wert: number | "") => void }) {
+  return (
+    <table className="table">
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Mindestanzahl (Standard: {uebersicht.standard ?? "keine"})</th>
+        </tr>
+      </thead>
+      <tbody>
+        {uebersicht.teilnehmer.map((t) => (
+          <tr key={t.teilnehmerId}>
+            <td>{t.name}</td>
+            <td>
+              <input
+                type="number"
+                min={0}
+                defaultValue={t.override ?? ""}
+                placeholder={uebersicht.standard != null ? String(uebersicht.standard) : "keine"}
+                onBlur={(e) => {
+                  const wert = e.target.value ? Number(e.target.value) : "";
+                  if (wert !== (t.override ?? "")) onAendern(t.teilnehmerId, wert);
+                }}
+              />
+            </td>
+          </tr>
+        ))}
+        {uebersicht.teilnehmer.length === 0 && (
+          <tr>
+            <td colSpan={2} className="empty">
+              Noch keine Teilnehmer.
+            </td>
+          </tr>
+        )}
+      </tbody>
+    </table>
+  );
+}
 
 export default function JahresabfragePage() {
   const { id } = useParams();
@@ -167,13 +221,21 @@ function GeneratorTab({ ausschreibungId, peId, onErzeugt }: { ausschreibungId: n
   const [error, setError] = useState<string | null>(null);
 
   const [offeneUebersichtSid, setOffeneUebersichtSid] = useState<number | null>(null);
-  const [uebersicht, setUebersicht] = useState<{
-    standard: number | null;
-    teilnehmer: { teilnehmerId: number; name: string; override: number | null }[];
-  } | null>(null);
+  const [uebersicht, setUebersicht] = useState<Uebersicht | null>(null);
+
+  const [gruppen, setGruppen] = useState<Gruppe[]>([]);
+  const [gruppeBezeichnung, setGruppeBezeichnung] = useState("");
+  const [gruppeMindestZusagen, setGruppeMindestZusagen] = useState<number | "">("");
+  const [gruppeAusgewaehlt, setGruppeAusgewaehlt] = useState<number[]>([]);
+  const [offeneGruppenUebersichtGid, setOffeneGruppenUebersichtGid] = useState<number | null>(null);
+  const [gruppenUebersicht, setGruppenUebersicht] = useState<Uebersicht | null>(null);
 
   function ladeSerien() {
     api<Terminserie[]>(`/ausschreibungen/${ausschreibungId}/terminserien`).then(setSerien);
+  }
+
+  function ladeGruppen() {
+    api<Gruppe[]>(`/ausschreibungen/${ausschreibungId}/gruppen`).then(setGruppen);
   }
 
   useEffect(() => {
@@ -182,6 +244,7 @@ function GeneratorTab({ ausschreibungId, peId, onErzeugt }: { ausschreibungId: n
       if (s[0]) setSchichtartId(s[0].id);
     });
     ladeSerien();
+    ladeGruppen();
   }, [peId]);
 
   function regelPayload() {
@@ -259,7 +322,7 @@ function GeneratorTab({ ausschreibungId, peId, onErzeugt }: { ausschreibungId: n
       setUebersicht(null);
       return;
     }
-    const res = await api<typeof uebersicht>(`/ausschreibungen/${ausschreibungId}/terminserien/${sid}/mindestzusagen`);
+    const res = await api<Uebersicht>(`/ausschreibungen/${ausschreibungId}/terminserien/${sid}/mindestzusagen`);
     setUebersicht(res);
     setOffeneUebersichtSid(sid);
   }
@@ -269,8 +332,70 @@ function GeneratorTab({ ausschreibungId, peId, onErzeugt }: { ausschreibungId: n
       method: "PUT",
       body: JSON.stringify({ mindestZusagen: wert === "" ? null : wert }),
     });
-    const res = await api<typeof uebersicht>(`/ausschreibungen/${ausschreibungId}/terminserien/${sid}/mindestzusagen`);
+    const res = await api<Uebersicht>(`/ausschreibungen/${ausschreibungId}/terminserien/${sid}/mindestzusagen`);
     setUebersicht(res);
+    onErzeugt();
+  }
+
+  async function gruppeAnlegen(e: FormEvent) {
+    e.preventDefault();
+    if (gruppeAusgewaehlt.length < 2) {
+      setError("Eine Gruppe braucht mindestens zwei Terminserien.");
+      return;
+    }
+    setError(null);
+    try {
+      await api(`/ausschreibungen/${ausschreibungId}/gruppen`, {
+        method: "POST",
+        body: JSON.stringify({
+          bezeichnung: gruppeBezeichnung,
+          terminserieIds: gruppeAusgewaehlt,
+          mindestZusagen: gruppeMindestZusagen || undefined,
+        }),
+      });
+      setGruppeBezeichnung("");
+      setGruppeMindestZusagen("");
+      setGruppeAusgewaehlt([]);
+      ladeGruppen();
+      onErzeugt();
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  async function gruppeMindestZusagenAendern(gid: number, wert: number | "") {
+    await api(`/ausschreibungen/${ausschreibungId}/gruppen/${gid}`, {
+      method: "PUT",
+      body: JSON.stringify({ mindestZusagen: wert === "" ? null : wert }),
+    });
+    ladeGruppen();
+    onErzeugt();
+  }
+
+  async function gruppeLoeschen(gid: number) {
+    await api(`/ausschreibungen/${ausschreibungId}/gruppen/${gid}`, { method: "DELETE" });
+    ladeGruppen();
+    onErzeugt();
+  }
+
+  async function gruppenUebersichtOeffnen(gid: number) {
+    if (offeneGruppenUebersichtGid === gid) {
+      setOffeneGruppenUebersichtGid(null);
+      setGruppenUebersicht(null);
+      return;
+    }
+    const res = await api<Uebersicht>(`/ausschreibungen/${ausschreibungId}/gruppen/${gid}/mindestzusagen`);
+    setGruppenUebersicht(res);
+    setOffeneGruppenUebersichtGid(gid);
+  }
+
+  async function gruppenOverrideAendern(gid: number, teilnehmerId: number, wert: number | "") {
+    await api(`/ausschreibungen/${ausschreibungId}/gruppen/${gid}/mindestzusagen/${teilnehmerId}`, {
+      method: "PUT",
+      body: JSON.stringify({ mindestZusagen: wert === "" ? null : wert }),
+    });
+    const res = await api<Uebersicht>(`/ausschreibungen/${ausschreibungId}/gruppen/${gid}/mindestzusagen`);
+    setGruppenUebersicht(res);
     onErzeugt();
   }
 
@@ -422,42 +547,9 @@ function GeneratorTab({ ausschreibungId, peId, onErzeugt }: { ausschreibungId: n
                 </td>
               </tr>
               {offeneUebersichtSid === s.id && uebersicht && (
-                <tr key={`${s.id}-uebersicht`}>
+                <tr>
                   <td colSpan={4}>
-                    <table className="table">
-                      <thead>
-                        <tr>
-                          <th>Name</th>
-                          <th>Mindestanzahl (Standard: {uebersicht.standard ?? "keine"})</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {uebersicht.teilnehmer.map((t) => (
-                          <tr key={t.teilnehmerId}>
-                            <td>{t.name}</td>
-                            <td>
-                              <input
-                                type="number"
-                                min={0}
-                                defaultValue={t.override ?? ""}
-                                placeholder={uebersicht.standard != null ? String(uebersicht.standard) : "keine"}
-                                onBlur={(e) => {
-                                  const wert = e.target.value ? Number(e.target.value) : "";
-                                  if (wert !== (t.override ?? "")) overrideAendern(s.id, t.teilnehmerId, wert);
-                                }}
-                              />
-                            </td>
-                          </tr>
-                        ))}
-                        {uebersicht.teilnehmer.length === 0 && (
-                          <tr>
-                            <td colSpan={2} className="empty">
-                              Noch keine Teilnehmer.
-                            </td>
-                          </tr>
-                        )}
-                      </tbody>
-                    </table>
+                    <MindestzusagenTabelle uebersicht={uebersicht} onAendern={(tid, wert) => overrideAendern(s.id, tid, wert)} />
                   </td>
                 </tr>
               )}
@@ -467,6 +559,95 @@ function GeneratorTab({ ausschreibungId, peId, onErzeugt }: { ausschreibungId: n
             <tr>
               <td colSpan={4} className="empty">
                 Noch keine Terminserie angelegt.
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+
+      <h2>Gruppen (mehrere Serien mit gemeinsamer Mindestanzahl)</h2>
+      <p className="hint">
+        Fasst mehrere Terminserien zu einer Gruppe zusammen, z. B. „Wochenenddienste" aus den Serien Frühschicht und
+        Spätschicht mit einer gemeinsamen Mindestanzahl (z. B. mind. 3 insgesamt, egal in welcher Kombination). Gilt
+        zusätzlich zu den Mindestanzahlen der einzelnen Serien, nicht statt ihnen.
+      </p>
+      <form className="card form-inline" onSubmit={gruppeAnlegen}>
+        <label>
+          Bezeichnung
+          <input value={gruppeBezeichnung} onChange={(e) => setGruppeBezeichnung(e.target.value)} required placeholder="z. B. Wochenenddienste" />
+        </label>
+        <div className="wochentage-auswahl">
+          {serien.map((s) => (
+            <label key={s.id} className="wochentag-checkbox">
+              <input
+                type="checkbox"
+                checked={gruppeAusgewaehlt.includes(s.id)}
+                onChange={(e) =>
+                  setGruppeAusgewaehlt(e.target.checked ? [...gruppeAusgewaehlt, s.id] : gruppeAusgewaehlt.filter((x) => x !== s.id))
+                }
+              />
+              {s.bezeichnung}
+            </label>
+          ))}
+        </div>
+        <label>
+          Mindestanzahl Zusagen für diese Gruppe
+          <input
+            type="number"
+            min={0}
+            value={gruppeMindestZusagen}
+            onChange={(e) => setGruppeMindestZusagen(e.target.value ? Number(e.target.value) : "")}
+            placeholder="optional"
+          />
+        </label>
+        <button type="submit">Gruppe anlegen</button>
+      </form>
+
+      <table className="table">
+        <thead>
+          <tr>
+            <th>Bezeichnung</th>
+            <th>Serien</th>
+            <th>Mindestanzahl Zusagen</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {gruppen.map((g) => (
+            <Fragment key={g.id}>
+              <tr>
+                <td>{g.bezeichnung}</td>
+                <td>{g.mitglieder.map((m) => m.bezeichnung).join(", ")}</td>
+                <td>
+                  <input
+                    type="number"
+                    min={0}
+                    defaultValue={g.mindest_zusagen ?? ""}
+                    placeholder="keine"
+                    onBlur={(e) => {
+                      const wert = e.target.value ? Number(e.target.value) : "";
+                      if (wert !== (g.mindest_zusagen ?? "")) gruppeMindestZusagenAendern(g.id, wert);
+                    }}
+                  />
+                </td>
+                <td>
+                  <button onClick={() => gruppenUebersichtOeffnen(g.id)}>Je Mitarbeiter</button>
+                  <button onClick={() => gruppeLoeschen(g.id)}>Löschen</button>
+                </td>
+              </tr>
+              {offeneGruppenUebersichtGid === g.id && gruppenUebersicht && (
+                <tr>
+                  <td colSpan={4}>
+                    <MindestzusagenTabelle uebersicht={gruppenUebersicht} onAendern={(tid, wert) => gruppenOverrideAendern(g.id, tid, wert)} />
+                  </td>
+                </tr>
+              )}
+            </Fragment>
+          ))}
+          {gruppen.length === 0 && (
+            <tr>
+              <td colSpan={4} className="empty">
+                Noch keine Gruppe angelegt.
               </td>
             </tr>
           )}
