@@ -183,6 +183,32 @@ CREATE TABLE IF NOT EXISTS terminserie_mindestzusagen (
   mindest_zusagen INTEGER NOT NULL,
   UNIQUE(terminserie_id, teilnehmer_id)
 );
+
+-- Gruppe aus mehreren Terminserien mit einer gemeinsamen Mindestanzahl -- z. B. "Wochenenddienste"
+-- aus den Serien "Fruehschicht" und "Spaetschicht", mind. 3 Zusagen insgesamt (z. B. 2x Fruehschicht
+-- + 1x Spaetschicht). Gilt zusaetzlich zu, nicht statt, den Mindestanzahlen der einzelnen Serien.
+CREATE TABLE IF NOT EXISTS terminserie_gruppe (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  ausschreibung_id INTEGER NOT NULL REFERENCES ausschreibung(id) ON DELETE CASCADE,
+  bezeichnung     TEXT NOT NULL,
+  mindest_zusagen INTEGER,
+  erstellt_am     TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS terminserie_gruppe_mitglied (
+  gruppe_id      INTEGER NOT NULL REFERENCES terminserie_gruppe(id) ON DELETE CASCADE,
+  terminserie_id INTEGER NOT NULL REFERENCES terminserie(id) ON DELETE CASCADE,
+  UNIQUE(gruppe_id, terminserie_id)
+);
+
+-- Mindestanzahl einer Gruppe kann ebenso wie bei einer einzelnen Serie je Teilnehmer abweichen.
+CREATE TABLE IF NOT EXISTS gruppe_mindestzusagen (
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  gruppe_id       INTEGER NOT NULL REFERENCES terminserie_gruppe(id) ON DELETE CASCADE,
+  teilnehmer_id   INTEGER NOT NULL REFERENCES abfrage_teilnehmer(id) ON DELETE CASCADE,
+  mindest_zusagen INTEGER NOT NULL,
+  UNIQUE(gruppe_id, teilnehmer_id)
+);
 `);
 
 // SQLite erlaubt bei ALTER TABLE ... ADD COLUMN weder UNIQUE- noch PRIMARY-KEY-Constraints;

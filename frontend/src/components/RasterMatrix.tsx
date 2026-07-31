@@ -15,7 +15,8 @@ export interface RasterZelle {
 }
 
 export interface RasterVorgabe {
-  terminserieId: number;
+  quelle: "serie" | "gruppe";
+  quelleId: number;
   bezeichnung: string;
   mindestZusagen: number;
   zusagenAnzahl: number;

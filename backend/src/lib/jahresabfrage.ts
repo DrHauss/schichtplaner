@@ -14,7 +14,8 @@ export interface RasterSpalte {
 }
 
 export interface Vorgabe {
-  terminserieId: number;
+  quelle: "serie" | "gruppe";
+  quelleId: number;
   bezeichnung: string;
   mindestZusagen: number;
   zusagenAnzahl: number;
@@ -39,6 +40,11 @@ export interface RasterZeile {
 // abweichen (terminserie_mindestzusagen, z. B. weniger Nachtschichten fuer Teilzeitkraefte);
 // ohne individuellen Eintrag gilt der Standard der Serie. Eine Serie ohne Standard und ohne
 // individuelle Vorgabe fuer diesen Teilnehmer erzeugt keine Vorgabe.
+//
+// Zusaetzlich koennen mehrere Serien zu einer Gruppe zusammengefasst werden (terminserie_gruppe),
+// mit einer gemeinsamen Mindestanzahl ueber alle Zusagen der Gruppe hinweg -- z. B. "Wochenenddienste"
+// aus den Serien Fruehschicht und Spaetschicht, mind. 3 insgesamt (z. B. 2x Frueh + 1x Spaet). Die
+// Gruppen-Vorgabe gilt zusaetzlich zu, nicht statt, den Vorgaben der einzelnen Serien.
 export function ladeVorgabenStatus(ausschreibungId: number | string, teilnehmerId: number, benutzerId: number): Vorgabe[] {
   const serien = db
     .prepare(
@@ -48,7 +54,8 @@ export function ladeVorgabenStatus(ausschreibungId: number | string, teilnehmerI
        WHERE t.ausschreibung_id = ? AND (t.mindest_zusagen IS NOT NULL OR tm.mindest_zusagen IS NOT NULL)`
     )
     .all(teilnehmerId, ausschreibungId) as { id: number; bezeichnung: string; standard: number | null; override: number | null }[];
-  return serien.map((s) => {
+
+  const serienVorgaben: Vorgabe[] = serien.map((s) => {
     const mindestZusagen = s.override ?? (s.standard as number);
     const zusagenAnzahl = (
       db
@@ -59,13 +66,46 @@ export function ladeVorgabenStatus(ausschreibungId: number | string, teilnehmerI
         .get(benutzerId, s.id) as { c: number }
     ).c;
     return {
-      terminserieId: s.id,
+      quelle: "serie",
+      quelleId: s.id,
       bezeichnung: s.bezeichnung,
       mindestZusagen,
       zusagenAnzahl,
       erfuellt: zusagenAnzahl >= mindestZusagen,
     };
   });
+
+  const gruppen = db
+    .prepare(
+      `SELECT g.id, g.bezeichnung, g.mindest_zusagen as standard, gm.mindest_zusagen as override
+       FROM terminserie_gruppe g
+       LEFT JOIN gruppe_mindestzusagen gm ON gm.gruppe_id = g.id AND gm.teilnehmer_id = ?
+       WHERE g.ausschreibung_id = ? AND (g.mindest_zusagen IS NOT NULL OR gm.mindest_zusagen IS NOT NULL)`
+    )
+    .all(teilnehmerId, ausschreibungId) as { id: number; bezeichnung: string; standard: number | null; override: number | null }[];
+
+  const gruppenVorgaben: Vorgabe[] = gruppen.map((g) => {
+    const mindestZusagen = g.override ?? (g.standard as number);
+    const zusagenAnzahl = (
+      db
+        .prepare(
+          `SELECT COUNT(*) c FROM bewerbung bw JOIN schichtblock sb ON sb.id = bw.schichtblock_id
+           WHERE bw.benutzer_id = ? AND bw.antwort = 'ja'
+           AND sb.terminserie_id IN (SELECT terminserie_id FROM terminserie_gruppe_mitglied WHERE gruppe_id = ?)`
+        )
+        .get(benutzerId, g.id) as { c: number }
+    ).c;
+    return {
+      quelle: "gruppe",
+      quelleId: g.id,
+      bezeichnung: g.bezeichnung,
+      mindestZusagen,
+      zusagenAnzahl,
+      erfuellt: zusagenAnzahl >= mindestZusagen,
+    };
+  });
+
+  return [...serienVorgaben, ...gruppenVorgaben];
 }
 
 // Ohne konfigurierte Vorgaben gilt die alte, einfache Regel: irgendeine Antwort genuegt.
