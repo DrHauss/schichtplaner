@@ -11,6 +11,7 @@ export default function Layout() {
         <div className="brand">SchichtWeb</div>
         <nav>
           <NavLink to="/mein-plan">Mein Plan</NavLink>
+          <NavLink to="/team-uebersicht">Team-Übersicht</NavLink>
           <NavLink to="/schichtboerse">Schichtbörse</NavLink>
           {istPlaner && <NavLink to="/plantafel">Plantafel</NavLink>}
           {istPlaner && <NavLink to="/stammdaten">Stammdaten</NavLink>}

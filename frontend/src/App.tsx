@@ -9,6 +9,7 @@ import JahresabfragePage from "./pages/JahresabfragePage";
 import AbfrageTokenPage from "./pages/AbfrageTokenPage";
 import PlantafelPage from "./pages/PlantafelPage";
 import StammdatenPage from "./pages/StammdatenPage";
+import TeamUebersichtPage from "./pages/TeamUebersichtPage";
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const { user, loading } = useAuth();
@@ -32,6 +33,7 @@ export default function App() {
       >
         <Route index element={<Navigate to="/mein-plan" replace />} />
         <Route path="mein-plan" element={<MeinPlanPage />} />
+        <Route path="team-uebersicht" element={<TeamUebersichtPage />} />
         <Route path="schichtboerse" element={<SchichtboersePage />} />
         <Route path="schichtboerse/ausschreibung/:id" element={<AusschreibungDetailPage />} />
         <Route path="schichtboerse/jahresabfrage/:id" element={<JahresabfragePage />} />
