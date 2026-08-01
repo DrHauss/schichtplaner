@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { formatDatum } from "../lib/datum";
@@ -19,6 +19,10 @@ interface Zuweisung {
   schichtart_id: number;
   datum: string;
   status: string;
+}
+interface Vorlage {
+  id: number;
+  bezeichnung: string;
 }
 
 function wochenTage(startMontag: Date) {
@@ -45,6 +49,10 @@ export default function PlantafelPage() {
   const [schichtarten, setSchichtarten] = useState<Schichtart[]>([]);
   const [zuweisungen, setZuweisungen] = useState<Zuweisung[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [vorlagen, setVorlagen] = useState<Vorlage[]>([]);
+  const [vorlageId, setVorlageId] = useState<number | "">("");
+  const [vorlageBenutzerId, setVorlageBenutzerId] = useState<number | "">("");
+  const [vorlageStart, setVorlageStart] = useState("");
 
   const tage = useMemo(() => wochenTage(woche), [woche]);
 
@@ -57,6 +65,7 @@ export default function PlantafelPage() {
       setZuweisungen(d.zuweisungen);
       setSchichtarten(d.schichtarten);
     });
+    api<Vorlage[]>(`/planungseinheiten/${peId}/schichtblock-vorlagen`).then(setVorlagen);
   }
 
   useEffect(() => {
@@ -98,6 +107,28 @@ export default function PlantafelPage() {
     load();
   }
 
+  async function zuweisenVorlage(e: FormEvent) {
+    e.preventDefault();
+    if (!vorlageId || !vorlageBenutzerId || !vorlageStart) return;
+    setError(null);
+    try {
+      await api(`/schichtblock-vorlagen/${vorlageId}/zuweisen`, {
+        method: "POST",
+        body: JSON.stringify({ benutzerId: vorlageBenutzerId, startDatum: vorlageStart }),
+      });
+      load();
+    } catch (err) {
+      const msg = (err as Error).message;
+      if (confirm(`${msg}\nTrotzdem zuweisen?`)) {
+        await api(`/schichtblock-vorlagen/${vorlageId}/zuweisen`, {
+          method: "POST",
+          body: JSON.stringify({ benutzerId: vorlageBenutzerId, startDatum: vorlageStart, force: true }),
+        });
+        load();
+      }
+    }
+  }
+
   async function veroeffentlichen() {
     if (!peId) return;
     const res = await api<{ anzahlMitarbeiter: number }>(`/planungseinheiten/${peId}/veroeffentlichen`, {
@@ -132,6 +163,41 @@ export default function PlantafelPage() {
       </div>
       {error && <div className="error">{error}</div>}
 
+      {vorlagen.length > 0 && (
+        <form className="card form-inline" onSubmit={zuweisenVorlage}>
+          <h2>Schichtblock zuweisen</h2>
+          <label>
+            Vorlage
+            <select value={vorlageId} onChange={(e) => setVorlageId(e.target.value ? Number(e.target.value) : "")}>
+              <option value="">– auswählen –</option>
+              {vorlagen.map((v) => (
+                <option key={v.id} value={v.id}>
+                  {v.bezeichnung}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Mitarbeiter
+            <select value={vorlageBenutzerId} onChange={(e) => setVorlageBenutzerId(e.target.value ? Number(e.target.value) : "")}>
+              <option value="">– auswählen –</option>
+              {mitarbeiter.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Startdatum
+            <input type="date" value={vorlageStart} onChange={(e) => setVorlageStart(e.target.value)} />
+          </label>
+          <button type="submit" disabled={!vorlageId || !vorlageBenutzerId || !vorlageStart}>
+            Zuweisen
+          </button>
+        </form>
+      )}
+
       <table className="table plantafel">
         <thead>
           <tr>
@@ -150,7 +216,7 @@ export default function PlantafelPage() {
                 const sa = z && schichtarten.find((s) => s.id === z.schichtart_id);
                 return (
                   <td key={t} className="plan-zelle" onClick={() => !z && zuweisen(m.id, t)}>
-                    {sa && (
+                    {sa ? (
                       <span
                         className="badge"
                         style={{ background: sa.farbe }}
@@ -162,6 +228,8 @@ export default function PlantafelPage() {
                       >
                         {sa.kuerzel}
                       </span>
+                    ) : (
+                      <span className="freischicht-hinweis">frei</span>
                     )}
                   </td>
                 );

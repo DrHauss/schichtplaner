@@ -16,6 +16,12 @@ const mitarbeiter1 = upsertUser("anna@schichtweb.de", "Anna Beispiel", "test1234
 const mitarbeiter2 = upsertUser("ben@schichtweb.de", "Ben Muster", "test1234");
 const mitarbeiter3 = upsertUser("clara@schichtweb.de", "Clara Test", "test1234");
 
+// Taegliche Sollarbeitszeit: Anna und Ben Vollzeit, Clara Teilzeit -- Grundlage der
+// Jahresarbeitszeit-Berechnung (Konzept: Sollarbeitszeit x Arbeitstage des Jahres in NRW).
+db.prepare("UPDATE benutzer SET soll_stunden_taeglich = ? WHERE id = ? AND soll_stunden_taeglich IS NULL").run(8, mitarbeiter1);
+db.prepare("UPDATE benutzer SET soll_stunden_taeglich = ? WHERE id = ? AND soll_stunden_taeglich IS NULL").run(8, mitarbeiter2);
+db.prepare("UPDATE benutzer SET soll_stunden_taeglich = ? WHERE id = ? AND soll_stunden_taeglich IS NULL").run(6, mitarbeiter3);
+
 let pe = db.prepare("SELECT id FROM planungseinheit WHERE name = ?").get("Pflegeteam Station 1") as
   | { id: number }
   | undefined;
@@ -37,26 +43,57 @@ insertMitgliedschaft.run(mitarbeiter1, peId, "mitarbeiter");
 insertMitgliedschaft.run(mitarbeiter2, peId, "mitarbeiter");
 insertMitgliedschaft.run(mitarbeiter3, peId, "mitarbeiter");
 
-function upsertSchichtart(kuerzel: string, bezeichnung: string, farbe: string, beginn: string, ende: string) {
+function upsertSchichtart(
+  kuerzel: string,
+  bezeichnung: string,
+  farbe: string,
+  beginn: string,
+  ende: string,
+  kategorie: "dienst" | "abwesenheit" = "dienst"
+) {
   const existing = db
     .prepare("SELECT id FROM schichtart WHERE planungseinheit_id = ? AND kuerzel = ?")
     .get(peId, kuerzel) as { id: number } | undefined;
   if (existing) return existing.id;
   const info = db
     .prepare(
-      "INSERT INTO schichtart (planungseinheit_id, kuerzel, bezeichnung, farbe, beginn, ende, pause_min, stundenwert) VALUES (?,?,?,?,?,?,?,?)"
+      "INSERT INTO schichtart (planungseinheit_id, kuerzel, bezeichnung, farbe, beginn, ende, pause_min, stundenwert, kategorie) VALUES (?,?,?,?,?,?,?,?,?)"
     )
-    .run(peId, kuerzel, bezeichnung, farbe, beginn, ende, 30, 7.5);
+    .run(peId, kuerzel, bezeichnung, farbe, beginn, ende, 30, 7.5, kategorie);
   return Number(info.lastInsertRowid);
 }
 
 const fruehId = upsertSchichtart("F", "Fruehschicht", "#22c55e", "06:00", "14:00");
 const spaetId = upsertSchichtart("S", "Spaetschicht", "#f59e0b", "14:00", "22:00");
 const nachtId = upsertSchichtart("N", "Nachtschicht", "#6366f1", "22:00", "06:00");
+const krankId = upsertSchichtart("K", "Krankheit", "#ef4444", "00:00", "00:00", "abwesenheit");
+const urlaubId = upsertSchichtart("U", "Urlaub", "#94a3b8", "00:00", "00:00", "abwesenheit");
+
+function upsertVorlage(bezeichnung: string, eintraege: { tagOffset: number; schichtartId: number }[]) {
+  const existing = db
+    .prepare("SELECT id FROM schichtblock_vorlage WHERE planungseinheit_id = ? AND bezeichnung = ?")
+    .get(peId, bezeichnung) as { id: number } | undefined;
+  if (existing) return existing.id;
+  const info = db.prepare("INSERT INTO schichtblock_vorlage (planungseinheit_id, bezeichnung) VALUES (?,?)").run(peId, bezeichnung);
+  const vorlageId = Number(info.lastInsertRowid);
+  const insertEintrag = db.prepare("INSERT INTO schichtblock_vorlage_eintrag (vorlage_id, tag_offset, schichtart_id) VALUES (?,?,?)");
+  for (const e of eintraege) insertEintrag.run(vorlageId, e.tagOffset, e.schichtartId);
+  return vorlageId;
+}
+
+upsertVorlage("Wochenende Fruehschicht", [
+  { tagOffset: 0, schichtartId: fruehId },
+  { tagOffset: 1, schichtartId: fruehId },
+]);
+upsertVorlage("Nachtschicht 3er Block", [
+  { tagOffset: 0, schichtartId: nachtId },
+  { tagOffset: 1, schichtartId: nachtId },
+  { tagOffset: 2, schichtartId: nachtId },
+]);
 
 console.log("Seed abgeschlossen.");
 console.log("Login-Daten:");
 console.log("  Admin:      admin@schichtweb.de / admin123");
 console.log("  Planer:     planer@schichtweb.de / planer123");
 console.log("  Mitarbeiter: anna@schichtweb.de / ben@schichtweb.de / clara@schichtweb.de, jeweils test1234");
-console.log({ peId, fruehId, spaetId, nachtId });
+console.log({ peId, fruehId, spaetId, nachtId, krankId, urlaubId });

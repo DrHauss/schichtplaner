@@ -9,6 +9,21 @@ interface Schichtart {
   beginn: string;
   ende: string;
   farbe: string;
+  kategorie: "dienst" | "abwesenheit";
+}
+
+interface VorlageEintrag {
+  id: number;
+  tag_offset: number;
+  schichtart_id: number;
+  kuerzel: string;
+  schichtart_bezeichnung: string;
+}
+
+interface Vorlage {
+  id: number;
+  bezeichnung: string;
+  eintraege: VorlageEintrag[];
 }
 
 interface PlanungseinheitOption {
@@ -35,8 +50,16 @@ interface Benutzer {
   name: string;
   personalnr: string | null;
   wochenstunden: number;
+  soll_stunden_taeglich: number | null;
   ist_admin: number;
   mitgliedschaften: Mitgliedschaft[];
+}
+
+interface Arbeitstage {
+  jahr: number;
+  wochentageGesamt: number;
+  feiertageAnWochentagen: number;
+  arbeitstage: number;
 }
 
 export default function StammdatenPage() {
@@ -69,6 +92,7 @@ export default function StammdatenPage() {
       {einheitenOptionen.length > 0 && (
         <SchichtartenSektion peId={peId} einheitenOptionen={einheitenOptionen} onPeChange={setPeId} />
       )}
+      {peId != null && <SchichtblockVorlagenSektion peId={peId} />}
 
       {istAdmin && <PlanungseinheitenSektion alleEinheiten={alleEinheiten} onGeaendert={() => api<Planungseinheit[]>("/planungseinheiten").then(setAlleEinheiten)} />}
       {istAdmin && <BenutzerverwaltungSektion alleEinheiten={alleEinheiten} />}
@@ -91,6 +115,7 @@ function SchichtartenSektion({
   const [beginn, setBeginn] = useState("06:00");
   const [ende, setEnde] = useState("14:00");
   const [farbe, setFarbe] = useState("#3b82f6");
+  const [kategorie, setKategorie] = useState<"dienst" | "abwesenheit">("dienst");
   const [editId, setEditId] = useState<number | null>(null);
   const [editForm, setEditForm] = useState<Schichtart | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -106,7 +131,7 @@ function SchichtartenSektion({
     if (!peId) return;
     await api(`/planungseinheiten/${peId}/schichtarten`, {
       method: "POST",
-      body: JSON.stringify({ kuerzel, bezeichnung, beginn, ende, farbe }),
+      body: JSON.stringify({ kuerzel, bezeichnung, beginn, ende, farbe, kategorie }),
     });
     setKuerzel("");
     setBezeichnung("");
@@ -130,6 +155,7 @@ function SchichtartenSektion({
           beginn: editForm.beginn,
           ende: editForm.ende,
           farbe: editForm.farbe,
+          kategorie: editForm.kategorie,
         }),
       });
       setEditId(null);
@@ -174,8 +200,19 @@ function SchichtartenSektion({
           Farbe
           <input type="color" value={farbe} onChange={(e) => setFarbe(e.target.value)} />
         </label>
+        <label>
+          Kategorie
+          <select value={kategorie} onChange={(e) => setKategorie(e.target.value as "dienst" | "abwesenheit")}>
+            <option value="dienst">Dienst (Tag, Nacht, ...)</option>
+            <option value="abwesenheit">Abwesenheit (Krankheit, Urlaub, ...)</option>
+          </select>
+        </label>
         <button type="submit">Anlegen</button>
       </form>
+      <p className="hint">
+        Abwesenheitsschichten lassen sich wie normale Schichten in der Plantafel zuweisen, lösen aber keine
+        Ruhezeit-Konfliktprüfung aus. Ein unbelegter Tag wird in den Übersichten automatisch als „Freischicht" angezeigt.
+      </p>
       {error && <div className="error">{error}</div>}
 
       <table className="table">
@@ -185,6 +222,7 @@ function SchichtartenSektion({
             <th>Bezeichnung</th>
             <th>Zeit</th>
             <th>Farbe</th>
+            <th>Kategorie</th>
             <th></th>
           </tr>
         </thead>
@@ -205,6 +243,15 @@ function SchichtartenSektion({
                 </td>
                 <td>
                   <input type="color" value={editForm.farbe} onChange={(e) => setEditForm({ ...editForm, farbe: e.target.value })} />
+                </td>
+                <td>
+                  <select
+                    value={editForm.kategorie}
+                    onChange={(e) => setEditForm({ ...editForm, kategorie: e.target.value as "dienst" | "abwesenheit" })}
+                  >
+                    <option value="dienst">Dienst</option>
+                    <option value="abwesenheit">Abwesenheit</option>
+                  </select>
                 </td>
                 <td>
                   <button onClick={bearbeitenSpeichern}>Speichern</button>
@@ -231,6 +278,7 @@ function SchichtartenSektion({
                     &nbsp;
                   </span>
                 </td>
+                <td>{s.kategorie === "abwesenheit" ? "Abwesenheit" : "Dienst"}</td>
                 <td>
                   <button onClick={() => bearbeitenStart(s)}>Bearbeiten</button>
                 </td>
@@ -239,7 +287,7 @@ function SchichtartenSektion({
           )}
           {schichtarten.length === 0 && (
             <tr>
-              <td colSpan={5} className="empty">
+              <td colSpan={6} className="empty">
                 Noch keine Schichtart angelegt.
               </td>
             </tr>
@@ -315,6 +363,7 @@ function BenutzerverwaltungSektion({ alleEinheiten }: { alleEinheiten: Planungse
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [personalnr, setPersonalnr] = useState("");
+  const [sollStundenTaeglich, setSollStundenTaeglich] = useState<number | "">("");
   const [neuesPasswort, setNeuesPasswort] = useState<{ email: string; passwort: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -322,10 +371,22 @@ function BenutzerverwaltungSektion({ alleEinheiten }: { alleEinheiten: Planungse
   const [zuweisenPeId, setZuweisenPeId] = useState<number | null>(null);
   const [zuweisenRolle, setZuweisenRolle] = useState("mitarbeiter");
 
+  const [jahr, setJahr] = useState(new Date().getFullYear() + 1);
+  const [arbeitstage, setArbeitstage] = useState<Arbeitstage | null>(null);
+
   function laden() {
     api<Benutzer[]>("/benutzer").then(setBenutzer);
   }
   useEffect(laden, []);
+
+  useEffect(() => {
+    api<Arbeitstage>(`/arbeitstage?jahr=${jahr}`).then(setArbeitstage);
+  }, [jahr]);
+
+  async function sollStundenAendern(benutzerId: number, wert: number | "") {
+    await api(`/benutzer/${benutzerId}`, { method: "PUT", body: JSON.stringify({ sollStundenTaeglich: wert === "" ? null : wert }) });
+    laden();
+  }
 
   async function anlegen(e: FormEvent) {
     e.preventDefault();
@@ -333,12 +394,13 @@ function BenutzerverwaltungSektion({ alleEinheiten }: { alleEinheiten: Planungse
     try {
       const res = await api<{ email: string; temporaeresPasswort: string }>("/benutzer", {
         method: "POST",
-        body: JSON.stringify({ name, email, personalnr: personalnr || undefined }),
+        body: JSON.stringify({ name, email, personalnr: personalnr || undefined, sollStundenTaeglich: sollStundenTaeglich || undefined }),
       });
       setNeuesPasswort({ email: res.email, passwort: res.temporaeresPasswort });
       setName("");
       setEmail("");
       setPersonalnr("");
+      setSollStundenTaeglich("");
       laden();
     } catch (err) {
       setError((err as Error).message);
@@ -377,6 +439,17 @@ function BenutzerverwaltungSektion({ alleEinheiten }: { alleEinheiten: Planungse
         <label>
           Personalnummer
           <input value={personalnr} onChange={(e) => setPersonalnr(e.target.value)} />
+        </label>
+        <label>
+          Soll-Std./Tag
+          <input
+            type="number"
+            min={0}
+            step={0.5}
+            value={sollStundenTaeglich}
+            onChange={(e) => setSollStundenTaeglich(e.target.value ? Number(e.target.value) : "")}
+            placeholder="optional"
+          />
         </label>
         <button type="submit">Anlegen</button>
       </form>
@@ -425,11 +498,24 @@ function BenutzerverwaltungSektion({ alleEinheiten }: { alleEinheiten: Planungse
         </button>
       </form>
 
+      <div className="inline-label">
+        Jahresarbeitszeit für
+        <input type="number" value={jahr} onChange={(e) => setJahr(Number(e.target.value))} style={{ width: "5rem" }} />
+        {arbeitstage && (
+          <span className="hint">
+            {arbeitstage.arbeitstage} Arbeitstage ({arbeitstage.wochentageGesamt} Wochentage − {arbeitstage.feiertageAnWochentagen}{" "}
+            Feiertage NRW an Wochentagen)
+          </span>
+        )}
+      </div>
+
       <table className="table">
         <thead>
           <tr>
             <th>Name</th>
             <th>E-Mail</th>
+            <th>Soll-Std./Tag</th>
+            <th>Jahresarbeitszeit {jahr}</th>
             <th>Rollen</th>
           </tr>
         </thead>
@@ -441,6 +527,24 @@ function BenutzerverwaltungSektion({ alleEinheiten }: { alleEinheiten: Planungse
                 {!!b.ist_admin && <span className="badge-typ"> Admin</span>}
               </td>
               <td>{b.email}</td>
+              <td>
+                <input
+                  type="number"
+                  min={0}
+                  step={0.5}
+                  defaultValue={b.soll_stunden_taeglich ?? ""}
+                  placeholder="keine"
+                  onBlur={(e) => {
+                    const wert = e.target.value ? Number(e.target.value) : "";
+                    if (wert !== (b.soll_stunden_taeglich ?? "")) sollStundenAendern(b.id, wert);
+                  }}
+                />
+              </td>
+              <td>
+                {b.soll_stunden_taeglich != null && arbeitstage
+                  ? `${(b.soll_stunden_taeglich * arbeitstage.arbeitstage).toLocaleString("de-DE", { maximumFractionDigits: 1 })} h`
+                  : "–"}
+              </td>
               <td>
                 {b.mitgliedschaften.map((m) => (
                   <span key={m.id} className="rolle-chip">
@@ -454,6 +558,130 @@ function BenutzerverwaltungSektion({ alleEinheiten }: { alleEinheiten: Planungse
               </td>
             </tr>
           ))}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
+const WOCHENTAGE_KURZ = ["Tag 1", "Tag 2", "Tag 3", "Tag 4", "Tag 5", "Tag 6", "Tag 7"];
+
+// Wiederverwendbare Schichtblock-Vorlagen (z. B. "Wochenende Fruehschicht", "Nachtschicht 3er
+// Block") fuer die direkte Top-down-Zuweisung in der Plantafel -- unabhaengig von der
+// Schichtboerse/Jahresabfrage.
+function SchichtblockVorlagenSektion({ peId }: { peId: number }) {
+  const [schichtarten, setSchichtarten] = useState<Schichtart[]>([]);
+  const [vorlagen, setVorlagen] = useState<Vorlage[]>([]);
+  const [bezeichnung, setBezeichnung] = useState("");
+  const [eintraege, setEintraege] = useState<{ tagOffset: number; schichtartId: number }[]>([{ tagOffset: 0, schichtartId: 0 }]);
+  const [error, setError] = useState<string | null>(null);
+
+  function laden() {
+    api<Schichtart[]>(`/planungseinheiten/${peId}/schichtarten`).then((s) => {
+      setSchichtarten(s);
+      setEintraege((prev) => prev.map((e) => ({ ...e, schichtartId: e.schichtartId || s[0]?.id || 0 })));
+    });
+    api<Vorlage[]>(`/planungseinheiten/${peId}/schichtblock-vorlagen`).then(setVorlagen);
+  }
+
+  useEffect(laden, [peId]);
+
+  async function anlegen(e: FormEvent) {
+    e.preventDefault();
+    setError(null);
+    try {
+      await api(`/planungseinheiten/${peId}/schichtblock-vorlagen`, {
+        method: "POST",
+        body: JSON.stringify({ bezeichnung, eintraege }),
+      });
+      setBezeichnung("");
+      setEintraege([{ tagOffset: 0, schichtartId: schichtarten[0]?.id ?? 0 }]);
+      laden();
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  async function loeschen(id: number) {
+    await api(`/schichtblock-vorlagen/${id}`, { method: "DELETE" });
+    laden();
+  }
+
+  if (schichtarten.length === 0) return null;
+
+  return (
+    <section>
+      <h2>Schichtblock-Vorlagen</h2>
+      <p className="hint">
+        Wiederverwendbare Muster für die direkte Zuweisung ganzer Blöcke in der Plantafel, z. B. „Wochenende Frühschicht"
+        (Tag 1+2 Frühschicht) oder „Nachtschicht 3er Block" (Tag 1–3 Nachtschicht).
+      </p>
+      <form className="card form-inline" onSubmit={anlegen}>
+        <label>
+          Bezeichnung
+          <input value={bezeichnung} onChange={(e) => setBezeichnung(e.target.value)} required placeholder="z. B. Nachtschicht 3er Block" />
+        </label>
+        {eintraege.map((e, i) => (
+          <div className="zeile" key={i}>
+            <span className="hint">{WOCHENTAGE_KURZ[e.tagOffset] ?? `Tag ${e.tagOffset + 1}`}</span>
+            <select
+              value={e.schichtartId}
+              onChange={(ev) => {
+                const copy = [...eintraege];
+                copy[i] = { ...copy[i], schichtartId: Number(ev.target.value) };
+                setEintraege(copy);
+              }}
+            >
+              {schichtarten.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.kuerzel} – {s.bezeichnung}
+                </option>
+              ))}
+            </select>
+            {eintraege.length > 1 && (
+              <button type="button" onClick={() => setEintraege(eintraege.filter((_, idx) => idx !== i))}>
+                Entfernen
+              </button>
+            )}
+          </div>
+        ))}
+        <button
+          type="button"
+          onClick={() =>
+            setEintraege([...eintraege, { tagOffset: eintraege.length, schichtartId: schichtarten[0]?.id ?? 0 }])
+          }
+        >
+          + Tag hinzufügen
+        </button>
+        <button type="submit">Vorlage anlegen</button>
+        {error && <div className="error">{error}</div>}
+      </form>
+
+      <table className="table">
+        <thead>
+          <tr>
+            <th>Bezeichnung</th>
+            <th>Enthält</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {vorlagen.map((v) => (
+            <tr key={v.id}>
+              <td>{v.bezeichnung}</td>
+              <td>{v.eintraege.map((e) => `Tag ${e.tag_offset + 1}: ${e.kuerzel}`).join(", ")}</td>
+              <td>
+                <button onClick={() => loeschen(v.id)}>Löschen</button>
+              </td>
+            </tr>
+          ))}
+          {vorlagen.length === 0 && (
+            <tr>
+              <td colSpan={3} className="empty">
+                Noch keine Vorlage angelegt.
+              </td>
+            </tr>
+          )}
         </tbody>
       </table>
     </section>

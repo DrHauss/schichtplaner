@@ -26,12 +26,16 @@ export function pruefeKonflikte(benutzerId: number, schichtartId: number, datum:
     konflikte.push({ typ: "doppelbelegung", meldung: `Mitarbeiter ist am ${datum} bereits verplant` });
   }
 
-  // Ruhezeit: benachbarte Tage (Vortag/Folgetag) pruefen
+  // Abwesenheitsschichten (Krankheit, Urlaub, ...) sind keine Arbeitszeit -- Ruhezeit ist hier
+  // nicht sinnvoll pruefbar bzw. relevant.
+  if (neueSchicht.kategorie === "abwesenheit") return konflikte;
+
+  // Ruhezeit: benachbarte Tage (Vortag/Folgetag) pruefen, Abwesenheitsschichten dabei ignorieren
   const nachbarn = db
     .prepare(
       `SELECT sz.datum, sa.beginn, sa.ende FROM schicht_zuweisung sz
        JOIN schichtart sa ON sa.id = sz.schichtart_id
-       WHERE sz.benutzer_id = ? AND sz.datum IN (date(?, '-1 day'), date(?, '+1 day'))`
+       WHERE sz.benutzer_id = ? AND sz.datum IN (date(?, '-1 day'), date(?, '+1 day')) AND sa.kategorie != 'abwesenheit'`
     )
     .all(benutzerId, datum, datum) as { datum: string; beginn: string; ende: string }[];
 

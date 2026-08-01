@@ -1,8 +1,9 @@
 import { Router } from "express";
 import { db } from "../lib/db";
 import { requireAuth, requirePlaner, AuthedRequest } from "../middleware/auth";
-import { pruefeKonflikte } from "../lib/regelwerk";
+import { pruefeKonflikte, Konflikt } from "../lib/regelwerk";
 import { benachrichtige } from "../lib/notify";
+import { istPlanerFuerPlanungseinheit } from "../lib/berechtigung";
 
 export const plantafelRouter = Router();
 plantafelRouter.use(requireAuth);
@@ -59,6 +60,53 @@ plantafelRouter.post("/zuweisungen", requirePlaner(), (req: AuthedRequest, res) 
 plantafelRouter.delete("/zuweisungen/:id", requirePlaner(), (req, res) => {
   db.prepare("DELETE FROM schicht_zuweisung WHERE id = ?").run(req.params.id);
   res.json({ ok: true });
+});
+
+// Ganzen Schichtblock aus einer Vorlage gezielt zuweisen (z. B. "Wochenende Fruehschicht",
+// "Nachtschicht 3er Block") -- direkte Top-down-Zuweisung, unabhaengig von der Schichtboerse.
+plantafelRouter.post("/schichtblock-vorlagen/:id/zuweisen", (req: AuthedRequest, res) => {
+  const vorlage = db.prepare("SELECT * FROM schichtblock_vorlage WHERE id = ?").get(req.params.id) as
+    | { id: number; planungseinheit_id: number }
+    | undefined;
+  if (!vorlage) return res.status(404).json({ error: "Vorlage nicht gefunden" });
+  if (!istPlanerFuerPlanungseinheit(req, vorlage.planungseinheit_id)) {
+    return res.status(403).json({ error: "Keine Planer-Berechtigung fuer diese Planungseinheit" });
+  }
+
+  const { benutzerId, startDatum, force } = req.body ?? {};
+  if (!benutzerId || !startDatum) return res.status(400).json({ error: "benutzerId und startDatum erforderlich" });
+
+  const eintraege = db
+    .prepare("SELECT tag_offset, schichtart_id FROM schichtblock_vorlage_eintrag WHERE vorlage_id = ? ORDER BY tag_offset")
+    .all(req.params.id) as { tag_offset: number; schichtart_id: number }[];
+  if (eintraege.length === 0) return res.status(400).json({ error: "Vorlage enthaelt keine Eintraege" });
+
+  const geplant = eintraege.map((e) => {
+    const d = new Date(`${startDatum}T00:00:00Z`);
+    d.setUTCDate(d.getUTCDate() + e.tag_offset);
+    return { datum: d.toISOString().slice(0, 10), schichtartId: e.schichtart_id };
+  });
+
+  const konflikte: (Konflikt & { datum: string })[] = [];
+  for (const g of geplant) {
+    for (const k of pruefeKonflikte(benutzerId, g.schichtartId, g.datum)) {
+      konflikte.push({ ...k, datum: g.datum });
+    }
+  }
+  if (konflikte.length > 0 && !force) {
+    return res.status(409).json({ error: "Konflikte gefunden", konflikte });
+  }
+
+  const insert = db.prepare(
+    `INSERT INTO schicht_zuweisung (benutzer_id, schichtart_id, datum, status, quelle) VALUES (?,?,?,'entwurf','manuell')
+     ON CONFLICT(benutzer_id, datum, schichtart_id) DO NOTHING`
+  );
+  const tx = db.transaction(() => {
+    for (const g of geplant) insert.run(benutzerId, g.schichtartId, g.datum);
+  });
+  tx();
+
+  res.status(201).json({ ok: true, anzahlTage: geplant.length, konflikte });
 });
 
 // Plan veroeffentlichen: alle Entwuerfe im Zeitraum -> veroeffentlicht, Benachrichtigung an betroffene Mitarbeiter

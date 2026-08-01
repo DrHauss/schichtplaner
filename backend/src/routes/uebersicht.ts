@@ -53,6 +53,17 @@ uebersichtRouter.get("/", (req, res) => {
   }[];
 
   res.json({
-    planungseinheiten: alle.map((p) => ({ ...p, zuweisungen: zuweisungenNachPe.get(p.id) ?? [] })),
+    planungseinheiten: alle.map((p) => ({
+      ...p,
+      // Vollstaendiges Team, nicht nur Personen mit Zuweisung -- sonst fehlen Mitarbeiter ohne
+      // veroeffentlichte Schicht komplett und ihre Tage koennten nicht als "Freischicht" gezeigt werden.
+      mitarbeiter: db
+        .prepare(
+          `SELECT b.id, b.name FROM mitgliedschaft m JOIN benutzer b ON b.id = m.benutzer_id
+           WHERE m.planungseinheit_id = ? AND m.rolle IN ('mitarbeiter','planer') ORDER BY b.name`
+        )
+        .all(p.id),
+      zuweisungen: zuweisungenNachPe.get(p.id) ?? [],
+    })),
   });
 });

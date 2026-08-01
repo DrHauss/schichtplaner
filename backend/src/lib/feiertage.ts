@@ -56,3 +56,30 @@ export function feiertageNRW(jahr: number): Feiertag[] {
     { datum: toDatum(jahr, 12, 26), bezeichnung: "2. Weihnachtstag" },
   ].sort((a, b) => a.datum.localeCompare(b.datum));
 }
+
+export interface Arbeitstage {
+  jahr: number;
+  wochentageGesamt: number; // Montag bis Freitag im Jahr, ohne Ruecksicht auf Feiertage
+  feiertageAnWochentagen: number; // gesetzliche Feiertage NRW, die auf einen Wochentag fallen
+  arbeitstage: number; // wochentageGesamt - feiertageAnWochentagen
+}
+
+function istWochenende(datum: Date): boolean {
+  const tag = datum.getUTCDay();
+  return tag === 0 || tag === 6;
+}
+
+// Arbeitstage eines Jahres in NRW: Montag bis Freitag, abzueglich gesetzlicher Feiertage, die
+// auf einen Wochentag fallen (ein Feiertag am Wochenende reduziert die Arbeitstage nicht, da
+// dieser Tag ohnehin kein Arbeitstag waere). Grundlage fuer die Jahresarbeitszeit-Berechnung.
+export function berechneArbeitstage(jahr: number): Arbeitstage {
+  let wochentageGesamt = 0;
+  const ende = new Date(Date.UTC(jahr, 11, 31));
+  for (let d = new Date(Date.UTC(jahr, 0, 1)); d <= ende; d.setUTCDate(d.getUTCDate() + 1)) {
+    if (!istWochenende(d)) wochentageGesamt++;
+  }
+
+  const feiertageAnWochentagen = feiertageNRW(jahr).filter((f) => !istWochenende(new Date(`${f.datum}T00:00:00Z`))).length;
+
+  return { jahr, wochentageGesamt, feiertageAnWochentagen, arbeitstage: wochentageGesamt - feiertageAnWochentagen };
+}
