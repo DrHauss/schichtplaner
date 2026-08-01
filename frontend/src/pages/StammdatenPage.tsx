@@ -62,6 +62,15 @@ interface Arbeitstage {
   arbeitstage: number;
 }
 
+interface FeiertagEintrag {
+  id: number;
+  jahr: number;
+  datum: string;
+  bezeichnung: string;
+  istFrei: boolean;
+  quelle: "generiert" | "manuell";
+}
+
 export default function StammdatenPage() {
   const { mitgliedschaften, user } = useAuth();
   const planerEinheiten = mitgliedschaften.filter((m) => m.rolle === "planer");
@@ -93,6 +102,7 @@ export default function StammdatenPage() {
         <SchichtartenSektion peId={peId} einheitenOptionen={einheitenOptionen} onPeChange={setPeId} />
       )}
       {peId != null && <SchichtblockVorlagenSektion peId={peId} />}
+      {einheitenOptionen.length > 0 && <FeiertageSektion />}
 
       {istAdmin && <PlanungseinheitenSektion alleEinheiten={alleEinheiten} onGeaendert={() => api<Planungseinheit[]>("/planungseinheiten").then(setAlleEinheiten)} />}
       {istAdmin && <BenutzerverwaltungSektion alleEinheiten={alleEinheiten} />}
@@ -354,6 +364,130 @@ function PlanungseinheitenSektion({ alleEinheiten, onGeaendert }: { alleEinheite
           )}
         </tbody>
       </table>
+    </section>
+  );
+}
+
+// Feiertage eines Jahres: werden beim ersten Zugriff automatisch aus der gesetzlichen NRW-Regel
+// generiert (siehe backend lib/feiertage.ts), sind danach bearbeitbar und um Sonderregelungen
+// (zusaetzliche, manuell angelegte Eintraege) ergaenzbar. Grundlage der Jahresarbeitszeit-Berechnung.
+function FeiertageSektion() {
+  const [jahr, setJahr] = useState(new Date().getFullYear() + 1);
+  const [feiertage, setFeiertage] = useState<FeiertagEintrag[]>([]);
+  const [neuDatum, setNeuDatum] = useState("");
+  const [neuBezeichnung, setNeuBezeichnung] = useState("");
+  const [error, setError] = useState<string | null>(null);
+
+  function laden() {
+    api<FeiertagEintrag[]>(`/feiertage?jahr=${jahr}`).then(setFeiertage);
+  }
+  useEffect(laden, [jahr]);
+
+  async function aendern(f: FeiertagEintrag, aenderung: Partial<Pick<FeiertagEintrag, "datum" | "bezeichnung" | "istFrei">>) {
+    await api(`/feiertage/${f.id}`, {
+      method: "PUT",
+      body: JSON.stringify({ datum: f.datum, bezeichnung: f.bezeichnung, istFrei: f.istFrei, ...aenderung }),
+    });
+    laden();
+  }
+
+  async function entfernen(id: number) {
+    await api(`/feiertage/${id}`, { method: "DELETE" });
+    laden();
+  }
+
+  async function sonderregelungAnlegen(e: FormEvent) {
+    e.preventDefault();
+    setError(null);
+    if (!neuDatum || !neuBezeichnung) return;
+    try {
+      await api("/feiertage", {
+        method: "POST",
+        body: JSON.stringify({ jahr, datum: neuDatum, bezeichnung: neuBezeichnung, istFrei: true }),
+      });
+      setNeuDatum("");
+      setNeuBezeichnung("");
+      laden();
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  return (
+    <section>
+      <h2>Feiertage</h2>
+      <div className="inline-label">
+        Jahr
+        <input type="number" value={jahr} onChange={(e) => setJahr(Number(e.target.value))} style={{ width: "5rem" }} />
+        <span className="hint">Gesetzliche Feiertage NRW werden automatisch generiert und sind unten bearbeitbar.</span>
+      </div>
+
+      <table className="table">
+        <thead>
+          <tr>
+            <th>Datum</th>
+            <th>Bezeichnung</th>
+            <th>Arbeitsfrei</th>
+            <th>Herkunft</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {feiertage.map((f) => (
+            <tr key={f.id}>
+              <td>
+                <input
+                  type="date"
+                  defaultValue={f.datum}
+                  onBlur={(e) => {
+                    if (e.target.value && e.target.value !== f.datum) aendern(f, { datum: e.target.value });
+                  }}
+                />
+              </td>
+              <td>
+                <input
+                  defaultValue={f.bezeichnung}
+                  onBlur={(e) => {
+                    if (e.target.value && e.target.value !== f.bezeichnung) aendern(f, { bezeichnung: e.target.value });
+                  }}
+                />
+              </td>
+              <td>
+                <input type="checkbox" checked={f.istFrei} onChange={(e) => aendern(f, { istFrei: e.target.checked })} />
+              </td>
+              <td>
+                <span className="badge-typ">{f.quelle === "generiert" ? "generiert" : "Sonderregelung"}</span>
+              </td>
+              <td>
+                <button type="button" onClick={() => entfernen(f.id)} title={f.quelle === "generiert" ? "Als nicht arbeitsfrei markieren" : "Entfernen"}>
+                  ×
+                </button>
+              </td>
+            </tr>
+          ))}
+          {feiertage.length === 0 && (
+            <tr>
+              <td colSpan={5} className="empty">
+                Keine Feiertage geladen.
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+
+      <form className="card form-inline" onSubmit={sonderregelungAnlegen}>
+        <h3>Sonderregelung hinzufügen</h3>
+        <label>
+          Datum
+          <input type="date" value={neuDatum} onChange={(e) => setNeuDatum(e.target.value)} required />
+        </label>
+        <label>
+          Bezeichnung
+          <input value={neuBezeichnung} onChange={(e) => setNeuBezeichnung(e.target.value)} required />
+        </label>
+        <button type="submit">Hinzufügen</button>
+      </form>
+      {error && <div className="error">{error}</div>}
     </section>
   );
 }

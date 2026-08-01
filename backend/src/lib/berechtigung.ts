@@ -28,3 +28,10 @@ export function istPlanerFuerPlanungseinheit(req: AuthedRequest, planungseinheit
     .prepare("SELECT 1 FROM mitgliedschaft WHERE benutzer_id = ? AND planungseinheit_id = ? AND rolle = 'planer'")
     .get(req.user!.sub, planungseinheitId);
 }
+
+// Fuer planungseinheiten-uebergreifende Stammdaten (z. B. Feiertage): Planer-Berechtigung in
+// irgendeiner Planungseinheit genuegt, da es keine sinnvolle Zuordnung zu genau einer Einheit gibt.
+export function istIrgendeinPlaner(req: AuthedRequest): boolean {
+  if (req.user!.istAdmin) return true;
+  return !!db.prepare("SELECT 1 FROM mitgliedschaft WHERE benutzer_id = ? AND rolle = 'planer'").get(req.user!.sub);
+}

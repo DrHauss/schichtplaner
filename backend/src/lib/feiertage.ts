@@ -1,5 +1,6 @@
 // Gesetzliche Feiertage NRW: feste Termine + bewegliche Termine auf Basis des Osterdatums
 // (Gauss'sche Osterformel, gregorianischer Kalender).
+import { db } from "./db";
 
 export interface Feiertag {
   datum: string; // YYYY-MM-DD
@@ -60,7 +61,7 @@ export function feiertageNRW(jahr: number): Feiertag[] {
 export interface Arbeitstage {
   jahr: number;
   wochentageGesamt: number; // Montag bis Freitag im Jahr, ohne Ruecksicht auf Feiertage
-  feiertageAnWochentagen: number; // gesetzliche Feiertage NRW, die auf einen Wochentag fallen
+  feiertageAnWochentagen: number; // arbeitsfreie Feiertage (DB, ggf. bearbeitet/ergaenzt), die auf einen Wochentag fallen
   arbeitstage: number; // wochentageGesamt - feiertageAnWochentagen
 }
 
@@ -69,9 +70,45 @@ function istWochenende(datum: Date): boolean {
   return tag === 0 || tag === 6;
 }
 
-// Arbeitstage eines Jahres in NRW: Montag bis Freitag, abzueglich gesetzlicher Feiertage, die
-// auf einen Wochentag fallen (ein Feiertag am Wochenende reduziert die Arbeitstage nicht, da
-// dieser Tag ohnehin kein Arbeitstag waere). Grundlage fuer die Jahresarbeitszeit-Berechnung.
+export interface FeiertagEintrag extends Feiertag {
+  id: number;
+  jahr: number;
+  istFrei: boolean;
+  quelle: "generiert" | "manuell";
+}
+
+// Generiert beim ersten Zugriff auf ein Jahr die gesetzlichen NRW-Feiertage in der Datenbank.
+// Existiert fuer das Jahr bereits mindestens ein Eintrag, wird nicht erneut generiert -- so
+// bleiben spaetere Bearbeitungen (Umbenennung, Datum, Deaktivierung) und manuell ergaenzte
+// Sonderregelungen dauerhaft erhalten, statt bei jedem Aufruf ueberschrieben zu werden.
+function ensureFeiertageGeneriert(jahr: number) {
+  const vorhanden = db.prepare("SELECT 1 FROM feiertag WHERE jahr = ? LIMIT 1").get(jahr);
+  if (vorhanden) return;
+  const insert = db.prepare(
+    "INSERT INTO feiertag (jahr, datum, bezeichnung, ist_frei, quelle) VALUES (?,?,?,1,'generiert')"
+  );
+  for (const f of feiertageNRW(jahr)) insert.run(jahr, f.datum, f.bezeichnung);
+}
+
+// Laedt die Feiertage eines Jahres aus der Datenbank (inkl. Bearbeitungen und Sonderregelungen)
+// und generiert bei Bedarf zuerst die gesetzlichen NRW-Feiertage als Ausgangsbasis.
+export function ladeFeiertage(jahr: number): FeiertagEintrag[] {
+  ensureFeiertageGeneriert(jahr);
+  const rows = db.prepare("SELECT * FROM feiertag WHERE jahr = ? ORDER BY datum").all(jahr) as any[];
+  return rows.map((r) => ({
+    id: r.id,
+    jahr: r.jahr,
+    datum: r.datum,
+    bezeichnung: r.bezeichnung,
+    istFrei: !!r.ist_frei,
+    quelle: r.quelle,
+  }));
+}
+
+// Arbeitstage eines Jahres in NRW: Montag bis Freitag, abzueglich der als arbeitsfrei
+// hinterlegten Feiertage (DB-gestuetzt, siehe ladeFeiertage), die auf einen Wochentag fallen
+// (ein Feiertag am Wochenende reduziert die Arbeitstage nicht, da dieser Tag ohnehin kein
+// Arbeitstag waere). Grundlage fuer die Jahresarbeitszeit-Berechnung.
 export function berechneArbeitstage(jahr: number): Arbeitstage {
   let wochentageGesamt = 0;
   const ende = new Date(Date.UTC(jahr, 11, 31));
@@ -79,7 +116,9 @@ export function berechneArbeitstage(jahr: number): Arbeitstage {
     if (!istWochenende(d)) wochentageGesamt++;
   }
 
-  const feiertageAnWochentagen = feiertageNRW(jahr).filter((f) => !istWochenende(new Date(`${f.datum}T00:00:00Z`))).length;
+  const feiertageAnWochentagen = ladeFeiertage(jahr).filter(
+    (f) => f.istFrei && !istWochenende(new Date(`${f.datum}T00:00:00Z`))
+  ).length;
 
   return { jahr, wochentageGesamt, feiertageAnWochentagen, arbeitstage: wochentageGesamt - feiertageAnWochentagen };
 }
