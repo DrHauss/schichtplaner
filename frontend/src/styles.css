@@ -115,6 +115,8 @@ body {
 .plantafel th.feiertag.wochenende, .plantafel td.feiertag.wochenende { background: #fde68a; }
 .plantafel.stempel-aktiv .plan-zelle { cursor: crosshair; }
 .plantafel.stempel-aktiv .plan-zelle:hover { outline: 2px solid #2563eb; outline-offset: -2px; }
+.plantafel.ziehen-aktiv { user-select: none; }
+.plantafel .plan-zelle.ziehen-markiert { background: #bfdbfe !important; }
 .plantafel .badge { margin: 0.05rem; }
 .badge-entwurf { outline: 2px dashed #f59e0b; outline-offset: 1px; }
 .kommentar-marker {

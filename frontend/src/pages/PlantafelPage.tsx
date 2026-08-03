@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, Konflikt } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { formatDatum, formatDatumZeit } from "../lib/datum";
@@ -117,6 +117,14 @@ export default function PlantafelPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Ziehen: nach Auswahl von Schichtart oder Radierer koennen mehrere Zellen in einem Zug
+  // erfasst werden (Maus gedrueckt halten, ueber Zellen fahren, loslassen). Die erfassten Zellen
+  // liegen in einer Ref (kein Re-Render pro Eintrag), ein Tick-Zaehler stoesst die Neuzeichnung
+  // fuer die Ziehen-Markierung an.
+  const dragZellenRef = useRef<Map<string, { benutzerId: number; datum: string }>>(new Map());
+  const [dragAktiv, setDragAktiv] = useState(false);
+  const [, setDragTick] = useState(0);
+
   const tage = useMemo(() => wochenTage(woche), [woche]);
 
   function load() {
@@ -194,21 +202,96 @@ export default function PlantafelPage() {
     }
   }
 
-  async function badgeKlick(z: Zuweisung) {
-    if (busy) return;
-    if (werkzeug?.art === "radierer") {
-      setBusy(true);
+  // Mehrere per Ziehen erfasste Zellen in einem Zug zuweisen. Konflikte einzelner Zellen werden
+  // gesammelt und in einer einzigen Rueckfrage gebuendelt (statt einem Dialog je Zelle).
+  async function batchZuweisen(zellen: { benutzerId: number; datum: string }[], schichtartId: number) {
+    setBusy(true);
+    setError(null);
+    const konflikte: { benutzerId: number; datum: string; text: string }[] = [];
+    for (const z of zellen) {
       try {
-        await api(`/zuweisungen/${z.id}`, { method: "DELETE" });
-        load();
-      } finally {
-        setBusy(false);
+        await api("/zuweisungen", {
+          method: "POST",
+          body: JSON.stringify({ benutzerId: z.benutzerId, schichtartId, datum: z.datum, planungseinheitId: peId }),
+        });
+      } catch (err) {
+        const text = konfliktText(err);
+        if (text === null) {
+          setError((err as Error).message);
+          setBusy(false);
+          load();
+          return;
+        }
+        konflikte.push({ ...z, text });
       }
+    }
+    if (konflikte.length > 0) {
+      const liste = konflikte
+        .map((k) => `${mitarbeiter.find((m) => m.id === k.benutzerId)?.name ?? ""} ${formatDatum(k.datum)}: ${k.text}`)
+        .join("\n");
+      if (confirm(`Konflikte bei ${konflikte.length} Zelle(n):\n${liste}\n\nTrotzdem zuweisen?`)) {
+        for (const k of konflikte) {
+          await api("/zuweisungen", {
+            method: "POST",
+            body: JSON.stringify({ benutzerId: k.benutzerId, schichtartId, datum: k.datum, planungseinheitId: peId, force: true }),
+          });
+        }
+      }
+    }
+    setBusy(false);
+    load();
+  }
+
+  async function batchLoeschen(zellen: { benutzerId: number; datum: string }[]) {
+    setBusy(true);
+    const ids = zellen.flatMap((z) => zellenZuweisungen(z.benutzerId, z.datum).map((zw) => zw.id));
+    for (const id of ids) {
+      await api(`/zuweisungen/${id}`, { method: "DELETE" });
+    }
+    setBusy(false);
+    load();
+  }
+
+  function zieheZelleHinzu(benutzerId: number, datum: string) {
+    dragZellenRef.current.set(`${benutzerId}|${datum}`, { benutzerId, datum });
+    setDragTick((t) => t + 1);
+  }
+
+  function zelleMouseDown(benutzerId: number, datum: string) {
+    if (!werkzeug || busy) return;
+    if (werkzeug.art === "vorlage") {
+      // Eine Vorlage spannt bereits mehrere Tage auf -- kein Ziehen noetig, sofortige Zuweisung.
+      zelleKlick(benutzerId, datum);
       return;
     }
-    // Mit aktivem Stempel greift der Klick auf das Kuerzel wie ein Klick auf die Zelle durch
-    // (das Badge verdeckt sonst die Zelle und eine belegte Zelle liesse sich nicht bestempeln).
-    if (werkzeug) return zelleKlick(z.benutzer_id, z.datum);
+    dragZellenRef.current = new Map();
+    setDragAktiv(true);
+    zieheZelleHinzu(benutzerId, datum);
+  }
+
+  function zelleMouseEnter(benutzerId: number, datum: string) {
+    if (!dragAktiv) return;
+    zieheZelleHinzu(benutzerId, datum);
+  }
+
+  useEffect(() => {
+    if (!dragAktiv) return;
+    function beenden() {
+      setDragAktiv(false);
+      const zellen = Array.from(dragZellenRef.current.values());
+      dragZellenRef.current = new Map();
+      setDragTick((t) => t + 1);
+      if (zellen.length === 0 || !werkzeug) return;
+      if (werkzeug.art === "schichtart") batchZuweisen(zellen, werkzeug.schichtart.id);
+      else if (werkzeug.art === "radierer") batchLoeschen(zellen);
+    }
+    window.addEventListener("mouseup", beenden);
+    return () => window.removeEventListener("mouseup", beenden);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dragAktiv]);
+
+  async function badgeKlick(z: Zuweisung) {
+    if (busy || werkzeug) return; // mit aktivem Werkzeug uebernimmt Ziehen/Klick auf die Zelle
     setDetailId(z.id);
   }
 
@@ -299,16 +382,20 @@ export default function PlantafelPage() {
         )}
         <span className="hint">
           {werkzeug?.art === "schichtart" &&
-            `„${werkzeug.schichtart.bezeichnung}" ausgewählt – Zellen anklicken, um zuzuweisen.`}
+            `„${werkzeug.schichtart.bezeichnung}" ausgewählt – Zellen anklicken oder durch Ziehen mehrere Tage auf einmal zuweisen.`}
           {werkzeug?.art === "vorlage" &&
             `„${werkzeug.vorlage.bezeichnung}" ausgewählt – Zelle anklicken, sie ist der erste Tag des Blocks.`}
-          {werkzeug?.art === "radierer" && "Radierer aktiv – Kürzel anklicken, um die Zuweisung zu entfernen."}
+          {werkzeug?.art === "radierer" &&
+            "Radierer aktiv – Kürzel anklicken oder über mehrere Zellen ziehen, um Zuweisungen zu entfernen."}
           {!werkzeug && "Werkzeug wählen, um Schichten zuzuweisen. Ohne Werkzeug öffnet ein Klick auf ein Kürzel die Details."}
         </span>
       </div>
 
       <div className="plantafel-scroll">
-        <table className={`table plantafel${werkzeug ? " stempel-aktiv" : ""}`}>
+        <table
+          className={`table plantafel${werkzeug ? " stempel-aktiv" : ""}${dragAktiv ? " ziehen-aktiv" : ""}`}
+          onDragStart={(e) => e.preventDefault()}
+        >
           <thead>
             <tr>
               <th>Mitarbeiter</th>
@@ -338,8 +425,14 @@ export default function PlantafelPage() {
                   ]
                     .filter(Boolean)
                     .join(" ");
+                  const wirdGezogen = dragZellenRef.current.has(`${m.id}|${t}`);
                   return (
-                    <td key={t} className={klassen} onClick={() => zelleKlick(m.id, t)}>
+                    <td
+                      key={t}
+                      className={`${klassen}${wirdGezogen ? " ziehen-markiert" : ""}`}
+                      onMouseDown={() => zelleMouseDown(m.id, t)}
+                      onMouseEnter={() => zelleMouseEnter(m.id, t)}
+                    >
                       {treffer.length > 0 ? (
                         treffer.map((z) => {
                           const sa = schichtarten.find((s) => s.id === z.schichtart_id);
@@ -351,6 +444,14 @@ export default function PlantafelPage() {
                               className={`badge${z.status === "entwurf" ? " badge-entwurf" : ""}`}
                               style={{ background: sa.farbe }}
                               title={`${sa.bezeichnung} (${z.status})${anzahlKommentare > 0 ? ` · ${anzahlKommentare} Kommentar(e)` : ""}`}
+                              onMouseDown={(e) => {
+                                e.stopPropagation();
+                                zelleMouseDown(z.benutzer_id, z.datum);
+                              }}
+                              onMouseEnter={(e) => {
+                                e.stopPropagation();
+                                zelleMouseEnter(z.benutzer_id, z.datum);
+                              }}
                               onClick={(e) => {
                                 e.stopPropagation();
                                 badgeKlick(z);
