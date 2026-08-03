@@ -26,7 +26,7 @@ plantafelRouter.get("/planungseinheiten/:id/plantafel", (req: AuthedRequest, res
   const mitarbeiter = db
     .prepare(
       `SELECT b.id, b.name FROM mitgliedschaft m JOIN benutzer b ON b.id = m.benutzer_id
-       WHERE m.planungseinheit_id = ? AND m.rolle IN ('mitarbeiter','planer')`
+       WHERE m.planungseinheit_id = ? AND m.rolle = 'mitarbeiter'`
     )
     .all(req.params.id) as { id: number; name: string }[];
 
@@ -47,6 +47,18 @@ plantafelRouter.get("/planungseinheiten/:id/plantafel", (req: AuthedRequest, res
 
   const schichtarten = db.prepare("SELECT * FROM schichtart").all();
   const bedarf = db.prepare("SELECT * FROM besetzungsbedarf").all();
+
+  // Bereitschaften sind keine Schichten -- eigene, roster-gescopte Liste analog zuweisungen.
+  const bereitschaften =
+    mitarbeiterIds.length === 0
+      ? []
+      : db
+          .prepare(
+            `SELECT * FROM bereitschaft_zuweisung
+             WHERE benutzer_id IN (${mitarbeiterIds.map(() => "?").join(",")}) AND datum BETWEEN ? AND ?`
+          )
+          .all(...mitarbeiterIds, von, bis);
+  const bereitschaftsarten = db.prepare("SELECT * FROM bereitschaftsart").all();
 
   // Kommentare des Zeitraums in einer Query mitladen (kein N+1). Wer kein Planer dieser
   // Planungseinheit ist, sieht die als 'nur_planer' markierten Kommentare nicht.
@@ -77,7 +89,7 @@ plantafelRouter.get("/planungseinheiten/:id/plantafel", (req: AuthedRequest, res
       .all(req.params.id, von, bis) as { sichtbarkeit: string }[]
   ).filter((k) => istPlaner || k.sichtbarkeit === "oeffentlich");
 
-  res.json({ mitarbeiter, zuweisungen, schichtarten, bedarf, kommentare, freischichtKommentare });
+  res.json({ mitarbeiter, zuweisungen, schichtarten, bedarf, kommentare, freischichtKommentare, bereitschaften, bereitschaftsarten });
 });
 
 // Schicht zuweisen (mit Konfliktpruefung)
@@ -130,6 +142,42 @@ plantafelRouter.delete("/zuweisungen/:id", (req: AuthedRequest, res) => {
     ).run(req.query.planungseinheitId, zuweisung.benutzer_id, zuweisung.datum, req.params.id);
   }
   db.prepare("DELETE FROM schicht_zuweisung WHERE id = ?").run(req.params.id);
+  res.json({ ok: true });
+});
+
+// Bereitschaft zuweisen -- keine Konfliktpruefung (keine Schicht, kein ArbZG-Ruhezeitbezug),
+// mehrere Bereitschaften am selben Tag sind moeglich (unterschiedliche bereitschaftsart_id) und
+// stehen zusaetzlich zu einer normalen Schicht am selben Tag.
+plantafelRouter.post("/bereitschaften", requirePlaner(), (req: AuthedRequest, res) => {
+  const { benutzerId, bereitschaftsartId, datum } = req.body ?? {};
+  if (!benutzerId || !bereitschaftsartId || !datum) {
+    return res.status(400).json({ error: "benutzerId, bereitschaftsartId, datum erforderlich" });
+  }
+  const bereitschaftsart = db.prepare("SELECT archiviert FROM bereitschaftsart WHERE id = ?").get(bereitschaftsartId) as
+    | { archiviert: number }
+    | undefined;
+  if (!bereitschaftsart) return res.status(404).json({ error: "Bereitschaftsart nicht gefunden" });
+  if (bereitschaftsart.archiviert) {
+    return res.status(400).json({ error: "Bereitschaftsart ist archiviert -- es koennen keine neuen Zuweisungen mehr angelegt werden" });
+  }
+  const info = db
+    .prepare(
+      `INSERT INTO bereitschaft_zuweisung (benutzer_id, bereitschaftsart_id, datum, status, quelle) VALUES (?,?,?,'entwurf','manuell')
+       ON CONFLICT(benutzer_id, bereitschaftsart_id, datum) DO NOTHING`
+    )
+    .run(benutzerId, bereitschaftsartId, datum);
+  res.status(201).json({ id: info.lastInsertRowid });
+});
+
+plantafelRouter.delete("/bereitschaften/:id", (req: AuthedRequest, res) => {
+  const bereitschaft = db.prepare("SELECT benutzer_id FROM bereitschaft_zuweisung WHERE id = ?").get(req.params.id) as
+    | { benutzer_id: number }
+    | undefined;
+  if (!bereitschaft) return res.status(404).json({ error: "Bereitschaft nicht gefunden" });
+  if (!istPlanerFuerMitarbeiter(req, bereitschaft.benutzer_id)) {
+    return res.status(403).json({ error: "Keine Planer-Berechtigung fuer diesen Mitarbeiter" });
+  }
+  db.prepare("DELETE FROM bereitschaft_zuweisung WHERE id = ?").run(req.params.id);
   res.json({ ok: true });
 });
 
@@ -275,7 +323,7 @@ plantafelRouter.post("/schichtblock-vorlagen/:id/zuweisen", (req: AuthedRequest,
 plantafelRouter.post("/planungseinheiten/:id/veroeffentlichen", requirePlaner("id"), (req, res) => {
   const { von, bis } = req.body ?? {};
   if (!von || !bis) return res.status(400).json({ error: "von und bis erforderlich" });
-  const roster = `SELECT benutzer_id FROM mitgliedschaft WHERE planungseinheit_id = ? AND rolle IN ('mitarbeiter','planer')`;
+  const roster = `SELECT benutzer_id FROM mitgliedschaft WHERE planungseinheit_id = ? AND rolle = 'mitarbeiter'`;
   const betroffene = db
     .prepare(
       `SELECT DISTINCT sz.benutzer_id FROM schicht_zuweisung sz
@@ -285,6 +333,12 @@ plantafelRouter.post("/planungseinheiten/:id/veroeffentlichen", requirePlaner("i
 
   db.prepare(
     `UPDATE schicht_zuweisung SET status = 'veroeffentlicht'
+     WHERE benutzer_id IN (${roster}) AND datum BETWEEN ? AND ? AND status = 'entwurf'`
+  ).run(req.params.id, von, bis);
+
+  // Bereitschaften werden zusammen mit den Schichten des Teams veroeffentlicht.
+  db.prepare(
+    `UPDATE bereitschaft_zuweisung SET status = 'veroeffentlicht'
      WHERE benutzer_id IN (${roster}) AND datum BETWEEN ? AND ? AND status = 'entwurf'`
   ).run(req.params.id, von, bis);
 

@@ -10,7 +10,7 @@ export interface RasterSpalte {
   bezeichnung: string;
   bedarf: number;
   datumSort: string | null;
-  schichten: { datum: string; kuerzel: string; beginn: string; ende: string }[];
+  schichten: { datum: string; kuerzel: string; beginn: string | null; ende: string | null }[];
 }
 
 export interface Vorgabe {
@@ -31,6 +31,10 @@ export interface RasterZeile {
   vorgaben: Vorgabe[];
   vollstaendig: boolean;
   versteckt: boolean;
+  // Angebote (Schichtbloecke) ohne jegliche Antwort dieses Teilnehmers -- unabhaengig von den
+  // Mindestanzahl-Vorgaben: hier muss ueberhaupt geantwortet werden (ja/wenn_noetig/nein), egal
+  // ob eine Vorgabe konfiguriert ist.
+  unbeantwortet: number[];
   zellen: Record<number, { antwort: string; gesperrt: boolean; grund?: string }>;
 }
 
@@ -134,10 +138,15 @@ export function baueRaster(
     bezeichnung: b.bezeichnung,
     bedarf: b.personen_bedarf,
     datumSort: b.datum_sort,
+    // LEFT JOIN auf beide Tabellen, da ein Eintrag entweder eine Schicht ODER eine Bereitschaft
+    // ist (siehe blockschicht in lib/db.ts).
     schichten: db
       .prepare(
-        `SELECT bs.datum, sa.kuerzel, sa.beginn, sa.ende FROM blockschicht bs
-         JOIN schichtart sa ON sa.id = bs.schichtart_id WHERE bs.schichtblock_id = ? ORDER BY bs.datum`
+        `SELECT bs.datum, COALESCE(sa.kuerzel, ba.kuerzel) as kuerzel, sa.beginn, sa.ende
+         FROM blockschicht bs
+         LEFT JOIN schichtart sa ON sa.id = bs.schichtart_id
+         LEFT JOIN bereitschaftsart ba ON ba.id = bs.bereitschaftsart_id
+         WHERE bs.schichtblock_id = ? ORDER BY bs.datum`
       )
       .all(b.id) as any[],
   }));
@@ -177,6 +186,18 @@ export function baueRaster(
       }
     }
     const vorgaben = t.benutzer_id ? ladeVorgabenStatus(ausschreibungId, t.id, t.benutzer_id) : [];
+    // Unabhaengig von der Sichtbarkeits-Einstellung (zeigeAlle/versteckt) ermittelt -- jeder
+    // Teilnehmer muss fuer sich selbst wissen, welche Angebote noch offen sind.
+    const unbeantwortet = t.benutzer_id
+      ? bloecke
+          .filter((b) => {
+            const bw = db
+              .prepare("SELECT antwort FROM bewerbung WHERE schichtblock_id = ? AND benutzer_id = ?")
+              .get(b.id, t.benutzer_id) as { antwort: string } | undefined;
+            return !bw?.antwort;
+          })
+          .map((b) => b.id)
+      : [];
     return {
       teilnehmerId: t.id,
       benutzerId: t.benutzer_id,
@@ -186,6 +207,7 @@ export function baueRaster(
       vorgaben,
       vollstaendig: istVollstaendig(vorgaben, t.abgegeben_am),
       versteckt: !zeigeAlle && !istEigeneZeile,
+      unbeantwortet,
       zellen,
     };
   });
@@ -230,10 +252,11 @@ export function schreibeAntworten(
       if (a.antwort !== "nein") {
         const schichten = db.prepare("SELECT * FROM blockschicht WHERE schichtblock_id = ?").all(a.schichtblockId) as {
           datum: string;
-          schichtart_id: number;
+          schichtart_id: number | null;
         }[];
         const konflikte: Konflikt[] = [];
-        for (const s of schichten) konflikte.push(...pruefeKonflikte(benutzerId, s.schichtart_id, s.datum));
+        // Bereitschaften loesen keine Doppelbelegungs-/Ruhezeit-Pruefung aus (keine Schicht).
+        for (const s of schichten) if (s.schichtart_id != null) konflikte.push(...pruefeKonflikte(benutzerId, s.schichtart_id, s.datum));
         if (konflikte.length) warnungen[a.schichtblockId] = konflikte;
       }
     }
@@ -255,7 +278,10 @@ export interface TeilnehmerEintrag {
 // Legt einen Teilnehmer an oder aktualisiert dessen Wunschanzahl. Ohne bestehendes Benutzerkonto
 // wird ein Konto ohne nutzbares Passwort erzeugt (kein Login noetig, aber alle bestehenden
 // Mechanismen -- Plantafel, Vergabe, iCal -- funktionieren unveraendert weiter, Konzept Kap. 3.3).
-export function legeTeilnehmerAn(ausschreibungId: number | string, planungseinheitId: number, eintrag: TeilnehmerEintrag) {
+// planungseinheitId ist optional -- Ausschreibungen sind nicht mehr zwingend an ein Team gebunden
+// (siehe ausschreibung_team); ohne (globale oder mehrteamige) Zuordnung wird keine neue
+// Mitgliedschaft vergeben, da es kein eindeutiges "zustaendiges" Team gibt.
+export function legeTeilnehmerAn(ausschreibungId: number | string, planungseinheitId: number | null, eintrag: TeilnehmerEintrag) {
   let benutzerId = eintrag.benutzerId ?? null;
   if (!benutzerId && eintrag.email) {
     const bestehend = db.prepare("SELECT id FROM benutzer WHERE email = ?").get(eintrag.email) as { id: number } | undefined;
@@ -268,10 +294,12 @@ export function legeTeilnehmerAn(ausschreibungId: number | string, planungseinhe
       .run(email, hashPassword(crypto.randomBytes(16).toString("hex")), eintrag.name);
     benutzerId = Number(info.lastInsertRowid);
   }
-  db.prepare("INSERT OR IGNORE INTO mitgliedschaft (benutzer_id, planungseinheit_id, rolle) VALUES (?,?,'mitarbeiter')").run(
-    benutzerId,
-    planungseinheitId
-  );
+  if (planungseinheitId != null) {
+    db.prepare("INSERT OR IGNORE INTO mitgliedschaft (benutzer_id, planungseinheit_id, rolle) VALUES (?,?,'mitarbeiter')").run(
+      benutzerId,
+      planungseinheitId
+    );
+  }
 
   const neuesToken = crypto.randomBytes(16).toString("hex");
   const zeile = db

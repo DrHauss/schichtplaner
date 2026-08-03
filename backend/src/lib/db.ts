@@ -63,6 +63,31 @@ CREATE TABLE IF NOT EXISTS schichtart (
   zuschlagsart TEXT
 );
 
+-- Bereitschaften (On-Call-Dienste) sind bewusst KEINE Schichtart -- sie sind weder Dienst noch
+-- Abwesenheit, koennen mehrfach pro Tag und zusaetzlich zu einer normalen Schicht bestehen, und
+-- loesen keine Doppelbelegungs-/Ruhezeit-Pruefung aus (siehe lib/regelwerk.ts). Global wie
+-- Schichtarten -- gelten fuer alle Planungseinheiten gleichermassen.
+CREATE TABLE IF NOT EXISTS bereitschaftsart (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kuerzel TEXT NOT NULL,
+  bezeichnung TEXT NOT NULL,
+  farbe TEXT DEFAULT '#a855f7',
+  archiviert INTEGER NOT NULL DEFAULT 0
+);
+
+-- Mehrere Bereitschaften am selben Tag = mehrere Zeilen mit unterschiedlicher bereitschaftsart_id
+-- (gleiches Muster wie schicht_zuweisung fuer mehrere Schichtarten am selben Tag).
+CREATE TABLE IF NOT EXISTS bereitschaft_zuweisung (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  benutzer_id INTEGER NOT NULL REFERENCES benutzer(id) ON DELETE CASCADE,
+  bereitschaftsart_id INTEGER NOT NULL REFERENCES bereitschaftsart(id) ON DELETE CASCADE,
+  datum TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'entwurf' CHECK (status IN ('entwurf','veroeffentlicht')),
+  quelle TEXT NOT NULL DEFAULT 'manuell' CHECK (quelle IN ('manuell','boerse')),
+  erstellt_am TEXT DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(benutzer_id, bereitschaftsart_id, datum)
+);
+
 CREATE TABLE IF NOT EXISTS besetzungsbedarf (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   schichtart_id INTEGER NOT NULL REFERENCES schichtart(id) ON DELETE CASCADE,
@@ -91,16 +116,26 @@ CREATE TABLE IF NOT EXISTS schicht_zuweisung (
   UNIQUE(benutzer_id, datum, schichtart_id)
 );
 
+-- Ausschreibungen/Jahresabfragen sind nicht mehr zwingend an ein Team gebunden (siehe
+-- ausschreibung_team unten) -- daher hier keine planungseinheit_id mehr.
 CREATE TABLE IF NOT EXISTS ausschreibung (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   titel TEXT NOT NULL,
-  planungseinheit_id INTEGER NOT NULL REFERENCES planungseinheit(id) ON DELETE CASCADE,
   bewerbungsfrist TEXT NOT NULL,
   vergabeverfahren TEXT NOT NULL DEFAULT 'manuell' CHECK (vergabeverfahren IN ('manuell','fairness')),
   status TEXT NOT NULL DEFAULT 'entwurf' CHECK (status IN ('entwurf','veroeffentlicht','geschlossen')),
   min_bloecke INTEGER,
   max_bloecke INTEGER,
   erstellt_am TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Team-Zuordnung einer Ausschreibung/Jahresabfrage: 0 Zeilen = gilt global (alle Teams/alle
+-- Mitarbeiter), 1 Zeile = wie bisher genau ein Team, mehrere Zeilen = teamuebergreifend auf
+-- mehrere gezielt ausgewaehlte Teams beschraenkt.
+CREATE TABLE IF NOT EXISTS ausschreibung_team (
+  ausschreibung_id   INTEGER NOT NULL REFERENCES ausschreibung(id) ON DELETE CASCADE,
+  planungseinheit_id INTEGER NOT NULL REFERENCES planungseinheit(id) ON DELETE CASCADE,
+  UNIQUE(ausschreibung_id, planungseinheit_id)
 );
 
 CREATE TABLE IF NOT EXISTS schichtblock (
@@ -111,11 +146,15 @@ CREATE TABLE IF NOT EXISTS schichtblock (
   qualifikation_id INTEGER REFERENCES qualifikation(id)
 );
 
+-- Ein Eintrag ist entweder eine Schicht ODER eine Bereitschaft (siehe bereitschaftsart unten) --
+-- nie beides, daher genau eine der beiden Spalten gesetzt.
 CREATE TABLE IF NOT EXISTS blockschicht (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   schichtblock_id INTEGER NOT NULL REFERENCES schichtblock(id) ON DELETE CASCADE,
   datum TEXT NOT NULL,
-  schichtart_id INTEGER NOT NULL REFERENCES schichtart(id) ON DELETE CASCADE
+  schichtart_id INTEGER REFERENCES schichtart(id) ON DELETE CASCADE,
+  bereitschaftsart_id INTEGER REFERENCES bereitschaftsart(id) ON DELETE CASCADE,
+  CHECK ((schichtart_id IS NULL) != (bereitschaftsart_id IS NULL))
 );
 
 CREATE TABLE IF NOT EXISTS bewerbung (
@@ -298,6 +337,10 @@ ensureColumn("schichtblock", "datum_sort", "TEXT");
 // Jahresabfrage -- z. B. "mind. 3 Wochenende Fruehschicht" und getrennt "mind. 2 Nachtschicht-4er".
 ensureColumn("terminserie", "mindest_zusagen", "INTEGER");
 
+// Eine Terminserie ist entweder ganz Schicht- oder ganz Bereitschafts-basiert (kein Mischen
+// innerhalb einer Serie) -- genau eines der beiden *_ids-Felder ist gefuellt (siehe jahresabfrage.ts).
+ensureColumn("terminserie", "bereitschaftsart_ids", "TEXT");
+
 // Unterscheidet normale Dienst-Schichtarten von Abwesenheitsschichten (Krankheit, Urlaub, ...).
 // Abwesenheitsschichten werden wie normale Schichten der Plantafel zugewiesen, loesen aber keine
 // ArbZG-Konfliktpruefung (Ruhezeit) aus -- siehe regelwerk.ts.
@@ -345,6 +388,75 @@ ensureColumn("schichtart", "archiviert", "INTEGER NOT NULL DEFAULT 0");
       SELECT id, kuerzel, bezeichnung, farbe, beginn, ende, pause_min, stundenwert, zuschlagsart, kategorie, ganztags, archiviert FROM schichtart;
     DROP TABLE schichtart;
     ALTER TABLE schichtart_neu RENAME TO schichtart;
+  `);
+  db.pragma("foreign_keys = ON");
+})();
+
+// Migration: Ausschreibungen/Jahresabfragen waren frueher zwingend genau einer Planungseinheit
+// zugeordnet, koennen aber jetzt teamuebergreifend oder komplett global laufen (siehe
+// ausschreibung_team oben). SQLite kann eine NOT NULL-Spalte nicht per ALTER TABLE entfernen --
+// daher Tabellen-Neubau wie beim Schichtart-Umbau. Bestehende Werte werden vorher 1:1 nach
+// ausschreibung_team uebernommen, damit das heutige Verhalten (genau ein Team) erhalten bleibt.
+(function migriereAusschreibungTeamUebergreifend() {
+  const spalten = db.prepare("PRAGMA table_info(ausschreibung)").all() as { name: string }[];
+  if (!spalten.some((s) => s.name === "planungseinheit_id")) return;
+  db.exec(`
+    INSERT INTO ausschreibung_team (ausschreibung_id, planungseinheit_id)
+      SELECT id, planungseinheit_id FROM ausschreibung WHERE planungseinheit_id IS NOT NULL;
+  `);
+  db.pragma("foreign_keys = OFF");
+  db.exec(`
+    CREATE TABLE ausschreibung_neu (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      titel TEXT NOT NULL,
+      bewerbungsfrist TEXT NOT NULL,
+      vergabeverfahren TEXT NOT NULL DEFAULT 'manuell' CHECK (vergabeverfahren IN ('manuell','fairness')),
+      status TEXT NOT NULL DEFAULT 'entwurf' CHECK (status IN ('entwurf','veroeffentlicht','geschlossen')),
+      min_bloecke INTEGER,
+      max_bloecke INTEGER,
+      erstellt_am TEXT DEFAULT CURRENT_TIMESTAMP,
+      typ TEXT NOT NULL DEFAULT 'runde',
+      zeitraum_von TEXT,
+      zeitraum_bis TEXT,
+      antwort_modus TEXT NOT NULL DEFAULT 'ja_nein',
+      sichtbarkeit TEXT NOT NULL DEFAULT 'alle',
+      zugang TEXT NOT NULL DEFAULT 'login',
+      erinnerung_14_versendet INTEGER NOT NULL DEFAULT 0,
+      erinnerung_48h_versendet INTEGER NOT NULL DEFAULT 0
+    );
+    INSERT INTO ausschreibung_neu (id, titel, bewerbungsfrist, vergabeverfahren, status, min_bloecke, max_bloecke, erstellt_am,
+        typ, zeitraum_von, zeitraum_bis, antwort_modus, sichtbarkeit, zugang, erinnerung_14_versendet, erinnerung_48h_versendet)
+      SELECT id, titel, bewerbungsfrist, vergabeverfahren, status, min_bloecke, max_bloecke, erstellt_am,
+        typ, zeitraum_von, zeitraum_bis, antwort_modus, sichtbarkeit, zugang, erinnerung_14_versendet, erinnerung_48h_versendet
+      FROM ausschreibung;
+    DROP TABLE ausschreibung;
+    ALTER TABLE ausschreibung_neu RENAME TO ausschreibung;
+  `);
+  db.pragma("foreign_keys = ON");
+})();
+
+// Migration: blockschicht.schichtart_id war NOT NULL, ein Eintrag kann jetzt aber auch eine
+// Bereitschaft statt einer Schicht sein (siehe bereitschaftsart oben) -- schichtart_id muss dafuer
+// nullbar werden. SQLite kann eine NOT NULL-Spalte nicht per ALTER TABLE aendern -- daher
+// Tabellen-Neubau wie bei den vorigen Migrationen. Bestehende Zeilen (samt id) bleiben erhalten.
+(function migriereBlockschichtBereitschaftsfaehig() {
+  const spalten = db.prepare("PRAGMA table_info(blockschicht)").all() as { name: string; notnull: number }[];
+  const schichtartSpalte = spalten.find((s) => s.name === "schichtart_id");
+  if (!schichtartSpalte || schichtartSpalte.notnull === 0) return;
+  db.pragma("foreign_keys = OFF");
+  db.exec(`
+    CREATE TABLE blockschicht_neu (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      schichtblock_id INTEGER NOT NULL REFERENCES schichtblock(id) ON DELETE CASCADE,
+      datum TEXT NOT NULL,
+      schichtart_id INTEGER REFERENCES schichtart(id) ON DELETE CASCADE,
+      bereitschaftsart_id INTEGER REFERENCES bereitschaftsart(id) ON DELETE CASCADE,
+      CHECK ((schichtart_id IS NULL) != (bereitschaftsart_id IS NULL))
+    );
+    INSERT INTO blockschicht_neu (id, schichtblock_id, datum, schichtart_id)
+      SELECT id, schichtblock_id, datum, schichtart_id FROM blockschicht;
+    DROP TABLE blockschicht;
+    ALTER TABLE blockschicht_neu RENAME TO blockschicht;
   `);
   db.pragma("foreign_keys = ON");
 })();

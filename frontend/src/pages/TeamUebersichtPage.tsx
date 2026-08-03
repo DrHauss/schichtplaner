@@ -34,6 +34,17 @@ interface FreischichtKommentar {
   erstelltAm: string;
 }
 
+interface BereitschaftZeile {
+  id: number;
+  datum: string;
+  benutzerId: number;
+  mitarbeiterName: string;
+  bereitschaftsartId: number;
+  kuerzel: string;
+  bezeichnung: string;
+  farbe: string;
+}
+
 interface PlanungseinheitUebersicht {
   id: number;
   name: string;
@@ -83,6 +94,7 @@ function istWochenende(datumIso: string): boolean {
 export default function TeamUebersichtPage() {
   const [{ jahr, monat }, setMonat] = useState(heuteJahrMonat());
   const [einheiten, setEinheiten] = useState<PlanungseinheitUebersicht[]>([]);
+  const [bereitschaften, setBereitschaften] = useState<BereitschaftZeile[]>([]);
   const [feiertage, setFeiertage] = useState<FeiertagEintrag[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -96,11 +108,14 @@ export default function TeamUebersichtPage() {
   useEffect(() => {
     setLoading(true);
     Promise.all([
-      api<{ planungseinheiten: PlanungseinheitUebersicht[] }>(`/uebersicht?von=${tage[0]}&bis=${tage[tage.length - 1]}`),
+      api<{ planungseinheiten: PlanungseinheitUebersicht[]; bereitschaften: BereitschaftZeile[] }>(
+        `/uebersicht?von=${tage[0]}&bis=${tage[tage.length - 1]}`
+      ),
       api<FeiertagEintrag[]>(`/feiertage?jahr=${jahr}`),
     ])
       .then(([uebersicht, f]) => {
         setEinheiten(uebersicht.planungseinheiten);
+        setBereitschaften(uebersicht.bereitschaften);
         setFeiertage(f);
       })
       .finally(() => setLoading(false));
@@ -122,6 +137,18 @@ export default function TeamUebersichtPage() {
 
   const monatLabel = new Date(jahr, monat - 1, 1).toLocaleDateString("de-DE", { month: "long", year: "numeric" });
 
+  // Bereitschaften sind global (nicht team-gebunden) und werden daher in einem einzigen Block vor
+  // allen Teams gezeigt, eine Zeile je Bereitschaftsart.
+  const bereitschaftsartenListe = useMemo(() => {
+    const nachId = new Map<number, { id: number; kuerzel: string; bezeichnung: string; farbe: string }>();
+    for (const b of bereitschaften) {
+      if (!nachId.has(b.bereitschaftsartId)) {
+        nachId.set(b.bereitschaftsartId, { id: b.bereitschaftsartId, kuerzel: b.kuerzel, bezeichnung: b.bezeichnung, farbe: b.farbe });
+      }
+    }
+    return Array.from(nachId.values()).sort((a, b) => a.bezeichnung.localeCompare(b.bezeichnung, "de"));
+  }, [bereitschaften]);
+
   return (
     <div className="page">
       <h1>Team-Übersicht</h1>
@@ -133,6 +160,48 @@ export default function TeamUebersichtPage() {
       </div>
 
       {loading && <div className="center-info">Lade…</div>}
+
+      {!loading && bereitschaftsartenListe.length > 0 && (
+        <section>
+          <h2>Bereitschaften</h2>
+          <p className="hint">Bereitschaften gelten teamübergreifend, daher hier gesammelt statt je Team.</p>
+          <div className="uebersicht-monat-scroll">
+            <table className="table uebersicht-monat">
+              <thead>
+                <tr>
+                  <th>Bereitschaft</th>
+                  {tage.map((t) => (
+                    <th key={t} className={tagKlasse(t)} title={feiertagNachDatum.get(t)}>
+                      <div className="tag-nr">{Number(t.slice(8, 10))}</div>
+                      <div className="tag-wt">{wochentagKurz(t)}</div>
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {bereitschaftsartenListe.map((ba) => (
+                  <tr key={ba.id}>
+                    <td>
+                      <span className="badge" style={{ background: ba.farbe }}>
+                        &nbsp;
+                      </span>{" "}
+                      {ba.bezeichnung}
+                    </td>
+                    {tage.map((t) => {
+                      const namen = bereitschaften.filter((b) => b.bereitschaftsartId === ba.id && b.datum === t).map((b) => b.mitarbeiterName);
+                      return (
+                        <td key={t} className={tagKlasse(t)} title={namen.join(", ")}>
+                          {namen.length === 0 ? "" : namen.length === 1 ? namen[0] : `${namen.length}×`}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
       {!loading &&
         einheiten.map((pe) => {

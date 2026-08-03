@@ -61,7 +61,7 @@ export function berechneVergabevorschlag(ausschreibungId: number | string): { se
       .all(block.id) as Bewerbungszeile[];
     const schichten = db.prepare("SELECT * FROM blockschicht WHERE schichtblock_id = ?").all(block.id) as {
       datum: string;
-      schichtart_id: number;
+      schichtart_id: number | null;
     }[];
     const zusagen = bewerbungen.filter((b) => b.antwort === "ja").length;
     return { block, bewerbungen, schichten, verhaeltnis: block.personen_bedarf > 0 ? zusagen / block.personen_bedarf : 0 };
@@ -75,6 +75,8 @@ export function berechneVergabevorschlag(ausschreibungId: number | string): { se
   for (const { block, bewerbungen, schichten } of mitDaten) {
     const konfliktfrei = bewerbungen.filter((bw) =>
       schichten.every((s) => {
+        // Bereitschaften loesen keine Doppelbelegungs-/Ruhezeit-Pruefung aus (keine Schicht).
+        if (s.schichtart_id == null) return true;
         const konflikte = pruefeKonflikte(bw.benutzer_id, s.schichtart_id, s.datum);
         return !konflikte.some((k) => k.typ === "doppelbelegung" || k.typ === "ruhezeit");
       })

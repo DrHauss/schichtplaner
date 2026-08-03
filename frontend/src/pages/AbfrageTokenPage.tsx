@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { api } from "../api/client";
 import TerminListe from "../components/TerminListe";
-import { RasterSpalte, RasterVorgabe, RasterZelle, unerfuellteVorgabenText } from "../components/RasterMatrix";
+import { RasterSpalte, RasterVorgabe, RasterZelle, unerfuellteVorgabenText, unbeantworteteAngeboteText } from "../components/RasterMatrix";
 import { formatDatum, formatDatumZeit } from "../lib/datum";
 
 interface AbfrageDaten {
@@ -15,7 +15,13 @@ interface AbfrageDaten {
     status: string;
   };
   spalten: RasterSpalte[];
-  zeilen: { benutzerId: number | null; vorgaben: RasterVorgabe[]; vollstaendig: boolean; zellen: Record<number, RasterZelle> }[];
+  zeilen: {
+    benutzerId: number | null;
+    vorgaben: RasterVorgabe[];
+    vollstaendig: boolean;
+    unbeantwortet: number[];
+    zellen: Record<number, RasterZelle>;
+  }[];
 }
 
 // Zugang per persoenlichem Link ohne Login (Konzept Kap. 3.3): eigenstaendige Seite ausserhalb
@@ -75,6 +81,11 @@ export default function AbfrageTokenPage() {
           Hallo {daten.teilnehmer.name}
           {daten.teilnehmer.wunschAnzahl != null && <> · Wunsch: ca. {daten.teilnehmer.wunschAnzahl} Dienste</>}
         </p>
+        {eigeneZeile && eigeneZeile.unbeantwortet.length > 0 && (
+          <p className="raster-gesperrt-hinweis">
+            Bitte für jedes Angebot eine Rückmeldung geben – noch offen: {unbeantworteteAngeboteText(eigeneZeile.unbeantwortet, daten.spalten)}.
+          </p>
+        )}
         {eigeneZeile && eigeneZeile.vorgaben.length > 0 && (
           <p className={eigeneZeile.vollstaendig ? "hint" : "raster-gesperrt-hinweis"}>
             {eigeneZeile.vollstaendig

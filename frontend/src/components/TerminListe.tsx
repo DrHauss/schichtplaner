@@ -47,7 +47,8 @@ export default function TerminListe({
             <ul className="schicht-list">
               {s.schichten.map((sch, i) => (
                 <li key={i}>
-                  {formatDatum(sch.datum)} · {sch.kuerzel} ({sch.beginn}–{sch.ende})
+                  {formatDatum(sch.datum)} · {sch.kuerzel}
+                  {sch.beginn && sch.ende ? ` (${sch.beginn}–${sch.ende})` : ""}
                 </li>
               ))}
             </ul>

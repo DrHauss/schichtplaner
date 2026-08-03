@@ -2,7 +2,13 @@ import { Fragment, FormEvent, useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
-import RasterMatrix, { RasterSpalte, RasterSummen, RasterZeile, unerfuellteVorgabenText } from "../components/RasterMatrix";
+import RasterMatrix, {
+  RasterSpalte,
+  RasterSummen,
+  RasterZeile,
+  unerfuellteVorgabenText,
+  unbeantworteteAngeboteText,
+} from "../components/RasterMatrix";
 import TerminListe from "../components/TerminListe";
 import { formatDatum, formatDatumZeit, parseDatum } from "../lib/datum";
 
@@ -25,6 +31,12 @@ interface RasterResponse {
 }
 
 interface Schichtart {
+  id: number;
+  kuerzel: string;
+  bezeichnung: string;
+}
+
+interface Bereitschaftsart {
   id: number;
   kuerzel: string;
   bezeichnung: string;
@@ -188,6 +200,11 @@ export default function JahresabfragePage() {
       {!istPlaner && (
         <>
           <h2>Meine Antworten</h2>
+          {eigeneZeile && eigeneZeile.unbeantwortet.length > 0 && (
+            <p className="raster-gesperrt-hinweis">
+              Bitte für jedes Angebot eine Rückmeldung geben – noch offen: {unbeantworteteAngeboteText(eigeneZeile.unbeantwortet, raster.spalten)}.
+            </p>
+          )}
           {eigeneZeile && eigeneZeile.vorgaben.length > 0 && (
             <p className={eigeneZeile.vollstaendig ? "hint" : "raster-gesperrt-hinweis"}>
               {eigeneZeile.vollstaendig
@@ -204,6 +221,7 @@ export default function JahresabfragePage() {
 
 function GeneratorTab({ ausschreibungId, peId, onErzeugt }: { ausschreibungId: number; peId: number; onErzeugt: () => void }) {
   const [schichtarten, setSchichtarten] = useState<Schichtart[]>([]);
+  const [bereitschaftsarten, setBereitschaftsarten] = useState<Bereitschaftsart[]>([]);
   const [serien, setSerien] = useState<Terminserie[]>([]);
   const [bezeichnung, setBezeichnung] = useState("");
   const [typ, setTyp] = useState<"woechentlich" | "monatlich" | "feiertage" | "einzeln">("woechentlich");
@@ -213,7 +231,12 @@ function GeneratorTab({ ausschreibungId, peId, onErzeugt }: { ausschreibungId: n
   const [woche, setWoche] = useState(1);
   const [daten, setDaten] = useState("");
   const [gruppierung, setGruppierung] = useState<"pro_termin" | "pro_woche">("pro_woche");
+  const [beachteFeiertage, setBeachteFeiertage] = useState(false);
+  // Eine Terminserie ist ganz Schicht- oder ganz Bereitschafts-basiert (kein Mischen) -- siehe
+  // lib/db.ts (blockschicht) und routes/jahresabfrage.ts.
+  const [serienTyp, setSerienTyp] = useState<"schicht" | "bereitschaft">("schicht");
   const [schichtartId, setSchichtartId] = useState<number | null>(null);
+  const [bereitschaftsartId, setBereitschaftsartId] = useState<number | null>(null);
   const [personenBedarf, setPersonenBedarf] = useState(1);
   const [mindestZusagen, setMindestZusagen] = useState<number | "">("");
   const [vorschau, setVorschau] = useState<{ anzahlTermine: number; anzahlBloecke: number } | null>(null);
@@ -243,21 +266,25 @@ function GeneratorTab({ ausschreibungId, peId, onErzeugt }: { ausschreibungId: n
       setSchichtarten(s);
       if (s[0]) setSchichtartId(s[0].id);
     });
+    api<Bereitschaftsart[]>("/bereitschaftsarten").then((b) => {
+      setBereitschaftsarten(b);
+      if (b[0]) setBereitschaftsartId(b[0].id);
+    });
     ladeSerien();
     ladeGruppen();
   }, [peId]);
 
   function regelPayload() {
     if (typ === "einzeln") {
-      return { typ, daten: daten.split(",").map((d) => parseDatum(d)).filter(Boolean) };
+      return { typ, daten: daten.split(",").map((d) => parseDatum(d)).filter(Boolean), beachteFeiertage };
     }
     if (typ === "feiertage") {
       return { typ, von, bis };
     }
     if (typ === "monatlich") {
-      return { typ, von, bis, wochentage, woche };
+      return { typ, von, bis, wochentage, woche, beachteFeiertage };
     }
-    return { typ, von, bis, wochentage };
+    return { typ, von, bis, wochentage, beachteFeiertage };
   }
 
   async function vorschauLaden() {
@@ -275,17 +302,20 @@ function GeneratorTab({ ausschreibungId, peId, onErzeugt }: { ausschreibungId: n
 
   async function erzeugen(e: FormEvent) {
     e.preventDefault();
-    if (!schichtartId) return;
+    const gewaehlteId = serienTyp === "bereitschaft" ? bereitschaftsartId : schichtartId;
+    if (!gewaehlteId) return;
     setBusy(true);
     setError(null);
     try {
+      const ids =
+        wochentage.length > 0 && (typ === "woechentlich" || typ === "monatlich") ? wochentage.map(() => gewaehlteId) : [gewaehlteId];
       await api(`/ausschreibungen/${ausschreibungId}/terminserien`, {
         method: "POST",
         body: JSON.stringify({
           bezeichnung: bezeichnung || "Termin",
           regel: regelPayload(),
           gruppierung,
-          schichtartIds: wochentage.length > 0 && (typ === "woechentlich" || typ === "monatlich") ? wochentage.map(() => schichtartId) : [schichtartId],
+          ...(serienTyp === "bereitschaft" ? { bereitschaftsartIds: ids } : { schichtartIds: ids }),
           personenBedarf,
           mindestZusagen: mindestZusagen || undefined,
         }),
@@ -469,16 +499,42 @@ function GeneratorTab({ ausschreibungId, peId, onErzeugt }: { ausschreibungId: n
             <option value="pro_woche">Block je Kalenderwoche (z. B. Sa+So)</option>
           </select>
         </label>
+        {typ !== "feiertage" && (
+          <label className="wochentag-checkbox">
+            <input type="checkbox" checked={beachteFeiertage} onChange={(e) => setBeachteFeiertage(e.target.checked)} />
+            Feiertage nicht anbieten (z. B. klassische Tagschicht)
+          </label>
+        )}
         <label>
-          Schichtart
-          <select value={schichtartId ?? ""} onChange={(e) => setSchichtartId(Number(e.target.value))}>
-            {schichtarten.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.kuerzel} – {s.bezeichnung}
-              </option>
-            ))}
+          Serientyp
+          <select value={serienTyp} onChange={(e) => setSerienTyp(e.target.value as typeof serienTyp)}>
+            <option value="schicht">Schicht</option>
+            <option value="bereitschaft">Bereitschaft</option>
           </select>
         </label>
+        {serienTyp === "schicht" ? (
+          <label>
+            Schichtart
+            <select value={schichtartId ?? ""} onChange={(e) => setSchichtartId(Number(e.target.value))}>
+              {schichtarten.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.kuerzel} – {s.bezeichnung}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : (
+          <label>
+            Bereitschaftsart
+            <select value={bereitschaftsartId ?? ""} onChange={(e) => setBereitschaftsartId(Number(e.target.value))}>
+              {bereitschaftsarten.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.kuerzel} – {b.bezeichnung}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <label>
           Personen-Bedarf
           <input type="number" min={1} value={personenBedarf} onChange={(e) => setPersonenBedarf(Number(e.target.value))} />

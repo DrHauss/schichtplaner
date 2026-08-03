@@ -1,32 +1,79 @@
 import { Router } from "express";
 import { db } from "../lib/db";
-import { requireAuth, requirePlaner, AuthedRequest } from "../middleware/auth";
+import { requireAuth, AuthedRequest } from "../middleware/auth";
 import { pruefeKonflikte } from "../lib/regelwerk";
 import { benachrichtige } from "../lib/notify";
-import { requirePlanerFuerAusschreibung } from "../lib/berechtigung";
+import {
+  requirePlanerFuerAusschreibung,
+  istPlanerFuerAusschreibung,
+  istPlanerFuerPlanungseinheit,
+  istIrgendeinPlaner,
+} from "../lib/berechtigung";
 
 export const boerseRouter = Router();
 boerseRouter.use(requireAuth);
 
+function teamsFuerAusschreibung(ausschreibungId: number | string): { id: number; name: string }[] {
+  return db
+    .prepare(
+      `SELECT p.id, p.name FROM ausschreibung_team at JOIN planungseinheit p ON p.id = at.planungseinheit_id
+       WHERE at.ausschreibung_id = ? ORDER BY p.name`
+    )
+    .all(ausschreibungId) as { id: number; name: string }[];
+}
+
 // --- Ausschreibungen ---
 
-boerseRouter.get("/planungseinheiten/:id/ausschreibungen", (req, res) => {
-  const rows = db
-    .prepare("SELECT * FROM ausschreibung WHERE planungseinheit_id = ? ORDER BY erstellt_am DESC")
-    .all(req.params.id);
-  res.json(rows);
+// Sichtbar sind global laufende Ausschreibungen (kein Team verknuepft) sowie alle, die an ein
+// Team gebunden sind, in dem der Nutzer Mitglied ist (jede Rolle); Admin sieht alles.
+boerseRouter.get("/ausschreibungen", (req: AuthedRequest, res) => {
+  const rows = (
+    req.user!.istAdmin
+      ? db.prepare("SELECT * FROM ausschreibung ORDER BY erstellt_am DESC").all()
+      : db
+          .prepare(
+            `SELECT DISTINCT a.* FROM ausschreibung a
+             LEFT JOIN ausschreibung_team at ON at.ausschreibung_id = a.id
+             WHERE at.ausschreibung_id IS NULL
+                OR at.planungseinheit_id IN (SELECT planungseinheit_id FROM mitgliedschaft WHERE benutzer_id = ?)
+             ORDER BY a.erstellt_am DESC`
+          )
+          .all(req.user!.sub)
+  ) as any[];
+  res.json(rows.map((a) => ({ ...a, teams: teamsFuerAusschreibung(a.id) })));
 });
 
-boerseRouter.post("/planungseinheiten/:id/ausschreibungen", requirePlaner("id"), (req, res) => {
-  const { titel, bewerbungsfrist, vergabeverfahren, minBloecke, maxBloecke } = req.body ?? {};
+boerseRouter.get("/ausschreibungen/:id", (req: AuthedRequest, res) => {
+  const ausschreibung = db.prepare("SELECT * FROM ausschreibung WHERE id = ?").get(req.params.id) as any;
+  if (!ausschreibung) return res.status(404).json({ error: "Nicht gefunden" });
+  res.json({ ...ausschreibung, teams: teamsFuerAusschreibung(req.params.id), istPlaner: istPlanerFuerAusschreibung(req, req.params.id) });
+});
+
+// planungseinheitIds: [] = global (alle Teams/alle Mitarbeiter), sonst 1 oder mehrere gezielt
+// gewaehlte Teams -- der Ersteller muss fuer jedes davon Planer sein (bzw. bei globaler
+// Ausschreibung Planer irgendeiner Einheit).
+boerseRouter.post("/ausschreibungen", (req: AuthedRequest, res) => {
+  const { titel, bewerbungsfrist, vergabeverfahren, minBloecke, maxBloecke, planungseinheitIds } = req.body ?? {};
   if (!titel || !bewerbungsfrist) return res.status(400).json({ error: "titel und bewerbungsfrist erforderlich" });
-  const info = db
-    .prepare(
-      `INSERT INTO ausschreibung (titel, planungseinheit_id, bewerbungsfrist, vergabeverfahren, min_bloecke, max_bloecke)
-       VALUES (?,?,?,?,?,?)`
-    )
-    .run(titel, req.params.id, bewerbungsfrist, vergabeverfahren ?? "manuell", minBloecke ?? null, maxBloecke ?? null);
-  res.status(201).json({ id: info.lastInsertRowid });
+  const teamIds: number[] = Array.isArray(planungseinheitIds) ? planungseinheitIds : [];
+  const berechtigt =
+    teamIds.length === 0 ? istIrgendeinPlaner(req) : teamIds.every((id) => istPlanerFuerPlanungseinheit(req, id));
+  if (!berechtigt) return res.status(403).json({ error: "Keine Planer-Berechtigung fuer eines der ausgewaehlten Teams" });
+
+  const ergebnis = db.transaction(() => {
+    const info = db
+      .prepare(
+        `INSERT INTO ausschreibung (titel, bewerbungsfrist, vergabeverfahren, min_bloecke, max_bloecke)
+         VALUES (?,?,?,?,?)`
+      )
+      .run(titel, bewerbungsfrist, vergabeverfahren ?? "manuell", minBloecke ?? null, maxBloecke ?? null);
+    const id = info.lastInsertRowid;
+    const insertTeam = db.prepare("INSERT INTO ausschreibung_team (ausschreibung_id, planungseinheit_id) VALUES (?,?)");
+    for (const teamId of teamIds) insertTeam.run(id, teamId);
+    return id;
+  })();
+
+  res.status(201).json({ id: ergebnis });
 });
 
 boerseRouter.post("/ausschreibungen/:id/schichtbloecke", (req: AuthedRequest, res) => {
@@ -49,9 +96,18 @@ boerseRouter.post("/ausschreibungen/:id/veroeffentlichen", (req: AuthedRequest, 
   if (!requirePlanerFuerAusschreibung(req, res, req.params.id)) return;
   db.prepare("UPDATE ausschreibung SET status = 'veroeffentlicht' WHERE id = ?").run(req.params.id);
   const ausschreibung = db.prepare("SELECT * FROM ausschreibung WHERE id = ?").get(req.params.id) as any;
-  const mitarbeiter = db
-    .prepare("SELECT benutzer_id FROM mitgliedschaft WHERE planungseinheit_id = ? AND rolle = 'mitarbeiter'")
-    .all(ausschreibung.planungseinheit_id) as { benutzer_id: number }[];
+  const teamIds = teamsFuerAusschreibung(req.params.id).map((t) => t.id);
+  // Keine Teams verknuepft = globale Ausschreibung -- dann alle Mitarbeiter systemweit benachrichtigen.
+  const mitarbeiter = (
+    teamIds.length === 0
+      ? db.prepare("SELECT DISTINCT benutzer_id FROM mitgliedschaft WHERE rolle = 'mitarbeiter'").all()
+      : db
+          .prepare(
+            `SELECT DISTINCT benutzer_id FROM mitgliedschaft
+             WHERE rolle = 'mitarbeiter' AND planungseinheit_id IN (${teamIds.map(() => "?").join(",")})`
+          )
+          .all(...teamIds)
+  ) as { benutzer_id: number }[];
   for (const m of mitarbeiter) {
     benachrichtige(m.benutzer_id, "neue_ausschreibung", { ausschreibungId: ausschreibung.id, titel: ausschreibung.titel });
   }
@@ -62,10 +118,16 @@ boerseRouter.post("/ausschreibungen/:id/veroeffentlichen", (req: AuthedRequest, 
 boerseRouter.get("/ausschreibungen/:id/schichtbloecke", (req: AuthedRequest, res) => {
   const bloecke = db.prepare("SELECT * FROM schichtblock WHERE ausschreibung_id = ?").all(req.params.id) as any[];
   const result = bloecke.map((block) => {
+    // LEFT JOIN auf beide Tabellen, da ein Eintrag entweder eine Schicht ODER eine Bereitschaft
+    // ist (siehe blockschicht in lib/db.ts) -- COALESCE liefert die jeweils passenden Felder.
     const schichten = db
       .prepare(
-        `SELECT bs.datum, sa.kuerzel, sa.bezeichnung, sa.beginn, sa.ende FROM blockschicht bs
-         JOIN schichtart sa ON sa.id = bs.schichtart_id WHERE bs.schichtblock_id = ? ORDER BY bs.datum`
+        `SELECT bs.datum, COALESCE(sa.kuerzel, ba.kuerzel) as kuerzel, COALESCE(sa.bezeichnung, ba.bezeichnung) as bezeichnung,
+                sa.beginn, sa.ende, (ba.id IS NOT NULL) as istBereitschaft
+         FROM blockschicht bs
+         LEFT JOIN schichtart sa ON sa.id = bs.schichtart_id
+         LEFT JOIN bereitschaftsart ba ON ba.id = bs.bereitschaftsart_id
+         WHERE bs.schichtblock_id = ? ORDER BY bs.datum`
       )
       .all(block.id);
     const bewerbungen = db.prepare("SELECT * FROM bewerbung WHERE schichtblock_id = ?").all(block.id);
@@ -86,11 +148,13 @@ boerseRouter.post("/schichtbloecke/:id/bewerbungen", (req: AuthedRequest, res) =
   const { prioritaet, kommentar } = req.body ?? {};
   const schichten = db.prepare("SELECT * FROM blockschicht WHERE schichtblock_id = ?").all(req.params.id) as {
     datum: string;
-    schichtart_id: number;
+    schichtart_id: number | null;
   }[];
 
   const warnungen: unknown[] = [];
   for (const s of schichten) {
+    // Bereitschaften loesen keine Doppelbelegungs-/Ruhezeit-Pruefung aus (keine Schicht).
+    if (s.schichtart_id == null) continue;
     const konflikte = pruefeKonflikte(req.user!.sub, s.schichtart_id, s.datum);
     warnungen.push(...konflikte);
   }
@@ -166,16 +230,13 @@ boerseRouter.post("/schichtbloecke/:id/vergeben", (req: AuthedRequest, res) => {
 
   const block = db.prepare("SELECT * FROM schichtblock WHERE id = ?").get(req.params.id) as any;
   if (!block) return res.status(404).json({ error: "Schichtblock nicht gefunden" });
-  const ausschreibung = db.prepare("SELECT * FROM ausschreibung WHERE id = ?").get(block.ausschreibung_id) as any;
-  if (!req.user!.istAdmin) {
-    const istPlaner = db
-      .prepare("SELECT 1 FROM mitgliedschaft WHERE benutzer_id = ? AND planungseinheit_id = ? AND rolle = 'planer'")
-      .get(req.user!.sub, ausschreibung.planungseinheit_id);
-    if (!istPlaner) return res.status(403).json({ error: "Keine Planer-Berechtigung fuer diese Planungseinheit" });
+  if (!istPlanerFuerAusschreibung(req, block.ausschreibung_id)) {
+    return res.status(403).json({ error: "Keine Planer-Berechtigung fuer diese Ausschreibung" });
   }
   const schichten = db.prepare("SELECT * FROM blockschicht WHERE schichtblock_id = ?").all(req.params.id) as {
     datum: string;
-    schichtart_id: number;
+    schichtart_id: number | null;
+    bereitschaftsart_id: number | null;
   }[];
 
   const tx = db.transaction((ids: number[]) => {
@@ -189,11 +250,20 @@ boerseRouter.post("/schichtbloecke/:id/vergeben", (req: AuthedRequest, res) => {
         benutzerId
       );
 
+      // Schicht-Eintraege landen in schicht_zuweisung, Bereitschafts-Eintraege in
+      // bereitschaft_zuweisung -- ein Block ist immer einheitlich das eine oder das andere.
       for (const s of schichten) {
-        db.prepare(
-          `INSERT INTO schicht_zuweisung (benutzer_id, schichtart_id, datum, status, quelle) VALUES (?,?,?,'entwurf','boerse')
-           ON CONFLICT(benutzer_id, datum, schichtart_id) DO NOTHING`
-        ).run(benutzerId, s.schichtart_id, s.datum);
+        if (s.schichtart_id != null) {
+          db.prepare(
+            `INSERT INTO schicht_zuweisung (benutzer_id, schichtart_id, datum, status, quelle) VALUES (?,?,?,'entwurf','boerse')
+             ON CONFLICT(benutzer_id, datum, schichtart_id) DO NOTHING`
+          ).run(benutzerId, s.schichtart_id, s.datum);
+        } else if (s.bereitschaftsart_id != null) {
+          db.prepare(
+            `INSERT INTO bereitschaft_zuweisung (benutzer_id, bereitschaftsart_id, datum, status, quelle) VALUES (?,?,?,'entwurf','boerse')
+             ON CONFLICT(benutzer_id, bereitschaftsart_id, datum) DO NOTHING`
+          ).run(benutzerId, s.bereitschaftsart_id, s.datum);
+        }
       }
       benachrichtige(benutzerId, "bewerbung_zugesagt", { schichtblockId: req.params.id, bezeichnung: block.bezeichnung });
     }
