@@ -11,6 +11,7 @@ interface PlanEintrag {
   farbe: string;
   beginn: string;
   ende: string;
+  ganztags?: number | boolean;
   // Nur oeffentliche Kommentare des Planers -- interne Planer-Notizen liefert der Server hier nicht.
   kommentare?: { autorName: string; text: string; erstelltAm: string }[];
 }
@@ -100,9 +101,7 @@ export default function MeinPlanPage() {
                     </div>
                   ))}
                 </td>
-                <td>
-                  {p.beginn}–{p.ende}
-                </td>
+                <td>{p.ganztags ? "ganztägig" : `${p.beginn}–${p.ende}`}</td>
               </tr>
             ))}
           </tbody>

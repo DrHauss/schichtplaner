@@ -8,7 +8,7 @@ meinRouter.use(requireAuth);
 meinRouter.get("/plan", (req: AuthedRequest, res) => {
   const { von, bis } = req.query as { von?: string; bis?: string };
   const params: unknown[] = [req.user!.sub];
-  let sql = `SELECT sz.*, sa.kuerzel, sa.bezeichnung, sa.farbe, sa.beginn, sa.ende
+  let sql = `SELECT sz.*, sa.kuerzel, sa.bezeichnung, sa.farbe, sa.beginn, sa.ende, sa.ganztags
              FROM schicht_zuweisung sz JOIN schichtart sa ON sa.id = sz.schichtart_id
              WHERE sz.benutzer_id = ? AND sz.status = 'veroeffentlicht'`;
   if (von && bis) {
@@ -43,13 +43,21 @@ meinRouter.get("/plan", (req: AuthedRequest, res) => {
 meinRouter.get("/plan.ics", (req: AuthedRequest, res) => {
   const rows = db
     .prepare(
-      `SELECT sz.datum, sa.bezeichnung, sa.beginn, sa.ende FROM schicht_zuweisung sz
+      `SELECT sz.datum, sa.bezeichnung, sa.beginn, sa.ende, sa.ganztags FROM schicht_zuweisung sz
        JOIN schichtart sa ON sa.id = sz.schichtart_id
        WHERE sz.benutzer_id = ? AND sz.status = 'veroeffentlicht' ORDER BY sz.datum`
     )
-    .all(req.user!.sub) as { datum: string; bezeichnung: string; beginn: string; ende: string }[];
+    .all(req.user!.sub) as { datum: string; bezeichnung: string; beginn: string; ende: string; ganztags: number }[];
 
   const fmt = (d: string, t: string) => `${d.replace(/-/g, "")}T${t.replace(":", "")}00`;
+  const alsDatumZiffern = (d: string) => d.replace(/-/g, "");
+  // iCal-Ende bei Ganztags-Terminen ist exklusiv -- DTEND muss daher auf den Folgetag zeigen.
+  const naechsterTag = (d: string) => {
+    const dt = new Date(`${d}T00:00:00Z`);
+    dt.setUTCDate(dt.getUTCDate() + 1);
+    return alsDatumZiffern(dt.toISOString().slice(0, 10));
+  };
+
   const lines = [
     "BEGIN:VCALENDAR",
     "VERSION:2.0",
@@ -58,8 +66,10 @@ meinRouter.get("/plan.ics", (req: AuthedRequest, res) => {
       [
         "BEGIN:VEVENT",
         `UID:${r.datum}-${r.bezeichnung}-${req.user!.sub}@schichtweb`,
-        `DTSTART:${fmt(r.datum, r.beginn)}`,
-        `DTEND:${fmt(r.datum, r.ende)}`,
+        r.ganztags
+          ? `DTSTART;VALUE=DATE:${alsDatumZiffern(r.datum)}`
+          : `DTSTART:${fmt(r.datum, r.beginn)}`,
+        r.ganztags ? `DTEND;VALUE=DATE:${naechsterTag(r.datum)}` : `DTEND:${fmt(r.datum, r.ende)}`,
         `SUMMARY:${r.bezeichnung}`,
         "END:VEVENT",
       ].join("\r\n")

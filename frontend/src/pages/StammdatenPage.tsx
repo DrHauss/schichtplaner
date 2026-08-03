@@ -10,6 +10,20 @@ interface Schichtart {
   ende: string;
   farbe: string;
   kategorie: "dienst" | "abwesenheit";
+  pause_min: number;
+  stundenwert: number | null;
+  ganztags: boolean;
+}
+
+// Zeitwert-Vorschlag aus Beginn/Ende/Pause -- der reine Vorschlag, keine Zwangs-Berechnung,
+// da der tatsaechlich zustehende Pausenanspruch vom hier angenommenen pauseMin abweichen kann.
+function zeitwertVorschlag(beginn: string, ende: string, pauseMin: number): number {
+  const [bh, bm] = beginn.split(":").map(Number);
+  const [eh, em] = ende.split(":").map(Number);
+  let minuten = eh * 60 + em - (bh * 60 + bm);
+  if (minuten <= 0) minuten += 24 * 60; // Schicht ueber Mitternacht
+  minuten -= pauseMin;
+  return Math.round((minuten / 60) * 4) / 4; // auf 0,25 Stunden gerundet
 }
 
 interface VorlageEintrag {
@@ -126,12 +140,18 @@ function SchichtartenSektion({
   const [ende, setEnde] = useState("14:00");
   const [farbe, setFarbe] = useState("#3b82f6");
   const [kategorie, setKategorie] = useState<"dienst" | "abwesenheit">("dienst");
+  const [ganztags, setGanztags] = useState(false);
+  const [pauseMin, setPauseMin] = useState(0);
+  const [stundenwert, setStundenwert] = useState<number | "">("");
   const [editId, setEditId] = useState<number | null>(null);
   const [editForm, setEditForm] = useState<Schichtart | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   function load() {
-    if (peId) api<Schichtart[]>(`/planungseinheiten/${peId}/schichtarten`).then(setSchichtarten);
+    if (peId)
+      api<Schichtart[]>(`/planungseinheiten/${peId}/schichtarten`).then((rows) =>
+        setSchichtarten(rows.map((s) => ({ ...s, ganztags: !!s.ganztags })))
+      );
   }
 
   useEffect(load, [peId]);
@@ -141,10 +161,23 @@ function SchichtartenSektion({
     if (!peId) return;
     await api(`/planungseinheiten/${peId}/schichtarten`, {
       method: "POST",
-      body: JSON.stringify({ kuerzel, bezeichnung, beginn, ende, farbe, kategorie }),
+      body: JSON.stringify({
+        kuerzel,
+        bezeichnung,
+        beginn,
+        ende,
+        farbe,
+        kategorie,
+        ganztags,
+        pauseMin,
+        stundenwert: stundenwert === "" ? null : stundenwert,
+      }),
     });
     setKuerzel("");
     setBezeichnung("");
+    setGanztags(false);
+    setPauseMin(0);
+    setStundenwert("");
     load();
   }
 
@@ -166,6 +199,9 @@ function SchichtartenSektion({
           ende: editForm.ende,
           farbe: editForm.farbe,
           kategorie: editForm.kategorie,
+          ganztags: editForm.ganztags,
+          pauseMin: editForm.pause_min,
+          stundenwert: editForm.stundenwert,
         }),
       });
       setEditId(null);
@@ -199,13 +235,46 @@ function SchichtartenSektion({
           <input value={bezeichnung} onChange={(e) => setBezeichnung(e.target.value)} required />
         </label>
         <label>
-          Beginn
-          <input type="time" value={beginn} onChange={(e) => setBeginn(e.target.value)} />
+          <input
+            type="checkbox"
+            checked={ganztags}
+            onChange={(e) => setGanztags(e.target.checked)}
+            style={{ width: "auto" }}
+          />{" "}
+          Ganztägig
+        </label>
+        {!ganztags && (
+          <>
+            <label>
+              Beginn
+              <input type="time" value={beginn} onChange={(e) => setBeginn(e.target.value)} />
+            </label>
+            <label>
+              Ende
+              <input type="time" value={ende} onChange={(e) => setEnde(e.target.value)} />
+            </label>
+          </>
+        )}
+        <label>
+          Pausenzeit (Min.)
+          <input type="number" min={0} value={pauseMin} onChange={(e) => setPauseMin(Number(e.target.value))} />
         </label>
         <label>
-          Ende
-          <input type="time" value={ende} onChange={(e) => setEnde(e.target.value)} />
+          Zeitwert (Std.)
+          <input
+            type="number"
+            step={0.25}
+            min={0}
+            value={stundenwert}
+            placeholder="keiner"
+            onChange={(e) => setStundenwert(e.target.value ? Number(e.target.value) : "")}
+          />
         </label>
+        {!ganztags && (
+          <button type="button" onClick={() => setStundenwert(zeitwertVorschlag(beginn, ende, pauseMin))}>
+            Vorschlag übernehmen
+          </button>
+        )}
         <label>
           Farbe
           <input type="color" value={farbe} onChange={(e) => setFarbe(e.target.value)} />
@@ -231,6 +300,8 @@ function SchichtartenSektion({
             <th>Kürzel</th>
             <th>Bezeichnung</th>
             <th>Zeit</th>
+            <th>Pause (Min.)</th>
+            <th>Zeitwert (Std.)</th>
             <th>Farbe</th>
             <th>Kategorie</th>
             <th></th>
@@ -247,9 +318,56 @@ function SchichtartenSektion({
                   <input value={editForm.bezeichnung} onChange={(e) => setEditForm({ ...editForm, bezeichnung: e.target.value })} />
                 </td>
                 <td>
-                  <input type="time" value={editForm.beginn} onChange={(e) => setEditForm({ ...editForm, beginn: e.target.value })} />
-                  –
-                  <input type="time" value={editForm.ende} onChange={(e) => setEditForm({ ...editForm, ende: e.target.value })} />
+                  <label className="inline-label">
+                    <input
+                      type="checkbox"
+                      checked={editForm.ganztags}
+                      onChange={(e) => setEditForm({ ...editForm, ganztags: e.target.checked })}
+                    />
+                    ganztägig
+                  </label>
+                  {!editForm.ganztags && (
+                    <>
+                      <input type="time" value={editForm.beginn} onChange={(e) => setEditForm({ ...editForm, beginn: e.target.value })} />
+                      –
+                      <input type="time" value={editForm.ende} onChange={(e) => setEditForm({ ...editForm, ende: e.target.value })} />
+                    </>
+                  )}
+                </td>
+                <td>
+                  <input
+                    type="number"
+                    min={0}
+                    style={{ width: "4rem" }}
+                    value={editForm.pause_min}
+                    onChange={(e) => setEditForm({ ...editForm, pause_min: Number(e.target.value) })}
+                  />
+                </td>
+                <td>
+                  <input
+                    type="number"
+                    step={0.25}
+                    min={0}
+                    style={{ width: "4rem" }}
+                    value={editForm.stundenwert ?? ""}
+                    placeholder="keiner"
+                    onChange={(e) =>
+                      setEditForm({ ...editForm, stundenwert: e.target.value ? Number(e.target.value) : null })
+                    }
+                  />
+                  {!editForm.ganztags && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setEditForm({
+                          ...editForm,
+                          stundenwert: zeitwertVorschlag(editForm.beginn, editForm.ende, editForm.pause_min),
+                        })
+                      }
+                    >
+                      Vorschlag
+                    </button>
+                  )}
                 </td>
                 <td>
                   <input type="color" value={editForm.farbe} onChange={(e) => setEditForm({ ...editForm, farbe: e.target.value })} />
@@ -280,9 +398,9 @@ function SchichtartenSektion({
               <tr key={s.id}>
                 <td>{s.kuerzel}</td>
                 <td>{s.bezeichnung}</td>
-                <td>
-                  {s.beginn}–{s.ende}
-                </td>
+                <td>{s.ganztags ? "ganztägig" : `${s.beginn}–${s.ende}`}</td>
+                <td>{s.pause_min}</td>
+                <td>{s.stundenwert ?? "–"}</td>
                 <td>
                   <span className="badge" style={{ background: s.farbe }}>
                     &nbsp;
@@ -297,7 +415,7 @@ function SchichtartenSektion({
           )}
           {schichtarten.length === 0 && (
             <tr>
-              <td colSpan={6} className="empty">
+              <td colSpan={8} className="empty">
                 Noch keine Schichtart angelegt.
               </td>
             </tr>

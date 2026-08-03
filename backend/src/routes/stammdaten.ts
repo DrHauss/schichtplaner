@@ -135,17 +135,22 @@ stammdatenRouter.get("/planungseinheiten/:id/schichtarten", (req, res) => {
 });
 
 stammdatenRouter.post("/planungseinheiten/:id/schichtarten", requirePlaner("id"), (req, res) => {
-  const { kuerzel, bezeichnung, farbe, beginn, ende, pauseMin, stundenwert, zuschlagsart, kategorie } = req.body ?? {};
-  if (!kuerzel || !bezeichnung || !beginn || !ende) {
-    return res.status(400).json({ error: "kuerzel, bezeichnung, beginn, ende erforderlich" });
+  const { kuerzel, bezeichnung, farbe, pauseMin, stundenwert, zuschlagsart, kategorie, ganztags } = req.body ?? {};
+  // Ganztaegige Schichtarten (typischerweise Abwesenheiten) haben keine sinnvolle Uhrzeit --
+  // beginn/ende werden serverseitig auf den Sentinel "00:00" erzwungen, unabhaengig vom Client.
+  const istGanztags = !!ganztags;
+  const beginn = istGanztags ? "00:00" : req.body?.beginn;
+  const ende = istGanztags ? "00:00" : req.body?.ende;
+  if (!kuerzel || !bezeichnung || (!istGanztags && (!beginn || !ende))) {
+    return res.status(400).json({ error: "kuerzel, bezeichnung erforderlich; beginn/ende ausser bei ganztags" });
   }
   if (kategorie && !["dienst", "abwesenheit"].includes(kategorie)) {
     return res.status(400).json({ error: "kategorie muss 'dienst' oder 'abwesenheit' sein" });
   }
   const info = db
     .prepare(
-      `INSERT INTO schichtart (planungseinheit_id, kuerzel, bezeichnung, farbe, beginn, ende, pause_min, stundenwert, zuschlagsart, kategorie)
-       VALUES (?,?,?,?,?,?,?,?,?,?)`
+      `INSERT INTO schichtart (planungseinheit_id, kuerzel, bezeichnung, farbe, beginn, ende, pause_min, stundenwert, zuschlagsart, kategorie, ganztags)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)`
     )
     .run(
       req.params.id,
@@ -157,7 +162,8 @@ stammdatenRouter.post("/planungseinheiten/:id/schichtarten", requirePlaner("id")
       pauseMin ?? 0,
       stundenwert ?? null,
       zuschlagsart ?? null,
-      kategorie ?? "dienst"
+      kategorie ?? "dienst",
+      istGanztags ? 1 : 0
     );
   res.status(201).json({ id: info.lastInsertRowid });
 });
@@ -170,15 +176,18 @@ stammdatenRouter.put("/schichtarten/:id", (req: AuthedRequest, res) => {
   if (!istPlanerFuerPlanungseinheit(req, schichtart.planungseinheit_id)) {
     return res.status(403).json({ error: "Keine Planer-Berechtigung fuer diese Planungseinheit" });
   }
-  const { kuerzel, bezeichnung, farbe, beginn, ende, pauseMin, stundenwert, zuschlagsart, kategorie } = req.body ?? {};
-  if (!kuerzel || !bezeichnung || !beginn || !ende) {
-    return res.status(400).json({ error: "kuerzel, bezeichnung, beginn, ende erforderlich" });
+  const { kuerzel, bezeichnung, farbe, pauseMin, stundenwert, zuschlagsart, kategorie, ganztags } = req.body ?? {};
+  const istGanztags = !!ganztags;
+  const beginn = istGanztags ? "00:00" : req.body?.beginn;
+  const ende = istGanztags ? "00:00" : req.body?.ende;
+  if (!kuerzel || !bezeichnung || (!istGanztags && (!beginn || !ende))) {
+    return res.status(400).json({ error: "kuerzel, bezeichnung erforderlich; beginn/ende ausser bei ganztags" });
   }
   if (kategorie && !["dienst", "abwesenheit"].includes(kategorie)) {
     return res.status(400).json({ error: "kategorie muss 'dienst' oder 'abwesenheit' sein" });
   }
   db.prepare(
-    `UPDATE schichtart SET kuerzel=?, bezeichnung=?, farbe=?, beginn=?, ende=?, pause_min=?, stundenwert=?, zuschlagsart=?, kategorie=? WHERE id=?`
+    `UPDATE schichtart SET kuerzel=?, bezeichnung=?, farbe=?, beginn=?, ende=?, pause_min=?, stundenwert=?, zuschlagsart=?, kategorie=?, ganztags=? WHERE id=?`
   ).run(
     kuerzel,
     bezeichnung,
@@ -189,6 +198,7 @@ stammdatenRouter.put("/schichtarten/:id", (req: AuthedRequest, res) => {
     stundenwert ?? null,
     zuschlagsart ?? null,
     kategorie ?? "dienst",
+    istGanztags ? 1 : 0,
     req.params.id
   );
   res.json({ ok: true });
