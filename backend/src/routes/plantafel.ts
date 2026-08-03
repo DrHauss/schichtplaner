@@ -107,11 +107,26 @@ plantafelRouter.post("/zuweisungen", requirePlaner(), (req: AuthedRequest, res) 
 // Die Planungseinheit wird aus der Zuweisung selbst abgeleitet -- requirePlaner() koennte sie
 // hier nicht ermitteln, da beim DELETE weder Body noch Query eine planungseinheitId enthalten.
 // Zugehoerige Kommentare verschwinden per ON DELETE CASCADE mit.
+// ?kommentareBehalten=1 (vom Radierer genutzt): Kommentare der Zuweisung werden vor dem Loeschen
+// in Freischicht-Kommentare "umgezogen" (der Tag wird ja zur Freischicht), statt sie per
+// ON DELETE CASCADE zu verlieren. Das explizite "Zuweisung loeschen" im Detailfenster nutzt das
+// Flag bewusst nicht -- dort warnt der confirm-Dialog schon vorab ueber den Kommentarverlust.
 plantafelRouter.delete("/zuweisungen/:id", (req: AuthedRequest, res) => {
-  const peId = peIdFuerZuweisung(req.params.id);
-  if (!peId) return res.status(404).json({ error: "Zuweisung nicht gefunden" });
-  if (!istPlanerFuerPlanungseinheit(req, peId)) {
+  const zuweisung = db
+    .prepare(
+      `SELECT sz.benutzer_id, sz.datum, sa.planungseinheit_id FROM schicht_zuweisung sz
+       JOIN schichtart sa ON sa.id = sz.schichtart_id WHERE sz.id = ?`
+    )
+    .get(req.params.id) as { benutzer_id: number; datum: string; planungseinheit_id: number } | undefined;
+  if (!zuweisung) return res.status(404).json({ error: "Zuweisung nicht gefunden" });
+  if (!istPlanerFuerPlanungseinheit(req, zuweisung.planungseinheit_id)) {
     return res.status(403).json({ error: "Keine Planer-Berechtigung fuer diese Planungseinheit" });
+  }
+  if (req.query.kommentareBehalten === "1") {
+    db.prepare(
+      `INSERT INTO freischicht_kommentar (planungseinheit_id, benutzer_id, datum, autor_id, text, sichtbarkeit, erstellt_am)
+       SELECT ?, ?, ?, autor_id, text, sichtbarkeit, erstellt_am FROM schicht_kommentar WHERE zuweisung_id = ?`
+    ).run(zuweisung.planungseinheit_id, zuweisung.benutzer_id, zuweisung.datum, req.params.id);
   }
   db.prepare("DELETE FROM schicht_zuweisung WHERE id = ?").run(req.params.id);
   res.json({ ok: true });
