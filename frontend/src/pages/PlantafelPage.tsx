@@ -12,6 +12,7 @@ interface Schichtart {
   kuerzel: string;
   bezeichnung: string;
   farbe: string;
+  archiviert: boolean | number;
 }
 interface Zuweisung {
   id: number;
@@ -29,10 +30,20 @@ interface Vorlage {
   id: number;
   bezeichnung: string;
   eintraege: VorlageEintrag[];
+  enthaeltArchivierte: boolean | number;
 }
 interface Kommentar {
   id: number;
   zuweisung_id: number;
+  autor_name: string;
+  text: string;
+  sichtbarkeit: "oeffentlich" | "nur_planer";
+  erstellt_am: string;
+}
+interface FreischichtKommentar {
+  id: number;
+  benutzer_id: number;
+  datum: string;
   autor_name: string;
   text: string;
   sichtbarkeit: "oeffentlich" | "nur_planer";
@@ -110,10 +121,12 @@ export default function PlantafelPage() {
   const [schichtarten, setSchichtarten] = useState<Schichtart[]>([]);
   const [zuweisungen, setZuweisungen] = useState<Zuweisung[]>([]);
   const [kommentare, setKommentare] = useState<Kommentar[]>([]);
+  const [freischichtKommentare, setFreischichtKommentare] = useState<FreischichtKommentar[]>([]);
   const [vorlagen, setVorlagen] = useState<Vorlage[]>([]);
   const [feiertage, setFeiertage] = useState<Set<string>>(new Set());
   const [werkzeug, setWerkzeug] = useState<Werkzeug | null>(null);
   const [detailId, setDetailId] = useState<number | null>(null);
+  const [freischichtDetail, setFreischichtDetail] = useState<{ benutzerId: number; datum: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -134,11 +147,13 @@ export default function PlantafelPage() {
       zuweisungen: Zuweisung[];
       schichtarten: Schichtart[];
       kommentare: Kommentar[];
+      freischichtKommentare: FreischichtKommentar[];
     }>(`/planungseinheiten/${peId}/plantafel?von=${tage[0]}&bis=${tage[6]}`).then((d) => {
       setMitarbeiter(d.mitarbeiter);
       setZuweisungen(d.zuweisungen);
       setSchichtarten(d.schichtarten);
       setKommentare(d.kommentare ?? []);
+      setFreischichtKommentare(d.freischichtKommentare ?? []);
     });
     api<Vorlage[]>(`/planungseinheiten/${peId}/schichtblock-vorlagen`).then(setVorlagen);
   }
@@ -146,6 +161,7 @@ export default function PlantafelPage() {
   useEffect(() => {
     load();
     setDetailId(null);
+    setFreischichtDetail(null);
   }, [peId, woche]);
 
   useEffect(() => {
@@ -161,6 +177,10 @@ export default function PlantafelPage() {
 
   function kommentareFuer(zuweisungId: number) {
     return kommentare.filter((k) => k.zuweisung_id === zuweisungId);
+  }
+
+  function freischichtKommentareFuer(benutzerId: number, datum: string) {
+    return freischichtKommentare.filter((k) => k.benutzer_id === benutzerId && k.datum === datum);
   }
 
   // Ein POST, bei Konflikten (409) Rueckfrage mit den konkreten Meldungen und Wiederholung mit force.
@@ -295,6 +315,11 @@ export default function PlantafelPage() {
     setDetailId(z.id);
   }
 
+  function freiKlick(benutzerId: number, datum: string) {
+    if (busy || werkzeug) return; // mit aktivem Werkzeug uebernimmt Ziehen/Klick auf die Zelle
+    setFreischichtDetail({ benutzerId, datum });
+  }
+
   async function zuweisungLoeschen(z: Zuweisung) {
     const anzahl = kommentareFuer(z.id).length;
     const frage = anzahl > 0 ? `Zuweisung inklusive ${anzahl} Kommentar(en) löschen?` : "Zuweisung löschen?";
@@ -343,43 +368,57 @@ export default function PlantafelPage() {
       {error && <div className="error">{error}</div>}
 
       <div className="card palette">
-        <span className="palette-label">Werkzeug</span>
-        {schichtarten.map((sa) => (
+        <div className="palette-gruppe">
+          <span className="palette-label">Einzelschichten</span>
+          {schichtarten
+            .filter((sa) => !sa.archiviert)
+            .map((sa) => (
+              <button
+                key={sa.id}
+                type="button"
+                className={`palette-item${werkzeug?.art === "schichtart" && werkzeug.schichtart.id === sa.id ? " aktiv" : ""}`}
+                style={{ background: sa.farbe, color: "white" }}
+                title={sa.bezeichnung}
+                onClick={() => setWerkzeug({ art: "schichtart", schichtart: sa })}
+              >
+                {sa.kuerzel}
+              </button>
+            ))}
+          {schichtarten.every((sa) => sa.archiviert) && <span className="empty">Keine aktiven Schichtarten.</span>}
+        </div>
+
+        <div className="palette-gruppe">
+          <span className="palette-label">Schichtblöcke</span>
+          {vorlagen
+            .filter((v) => !v.enthaeltArchivierte)
+            .map((v) => (
+              <button
+                key={v.id}
+                type="button"
+                className={`palette-item palette-vorlage${werkzeug?.art === "vorlage" && werkzeug.vorlage.id === v.id ? " aktiv" : ""}`}
+                title={v.eintraege.map((e) => `Tag ${e.tag_offset + 1}: ${e.kuerzel}`).join(", ")}
+                onClick={() => setWerkzeug({ art: "vorlage", vorlage: v })}
+              >
+                {v.bezeichnung}
+              </button>
+            ))}
+          {vorlagen.length === 0 && <span className="empty">Keine Schichtblock-Vorlagen angelegt.</span>}
+        </div>
+
+        <div className="palette-gruppe palette-werkzeuge">
           <button
-            key={sa.id}
             type="button"
-            className={`palette-item${werkzeug?.art === "schichtart" && werkzeug.schichtart.id === sa.id ? " aktiv" : ""}`}
-            style={{ background: sa.farbe, color: "white" }}
-            title={sa.bezeichnung}
-            onClick={() => setWerkzeug({ art: "schichtart", schichtart: sa })}
+            className={`palette-item palette-radierer${werkzeug?.art === "radierer" ? " aktiv" : ""}`}
+            title="Zugewiesene Schicht durch Klick auf das Kürzel entfernen"
+            onClick={() => setWerkzeug({ art: "radierer" })}
           >
-            {sa.kuerzel}
+            Radierer
           </button>
-        ))}
-        {vorlagen.map((v) => (
-          <button
-            key={v.id}
-            type="button"
-            className={`palette-item palette-vorlage${werkzeug?.art === "vorlage" && werkzeug.vorlage.id === v.id ? " aktiv" : ""}`}
-            title={v.eintraege.map((e) => `Tag ${e.tag_offset + 1}: ${e.kuerzel}`).join(", ")}
-            onClick={() => setWerkzeug({ art: "vorlage", vorlage: v })}
-          >
-            {v.bezeichnung}
+          <button type="button" className="palette-item palette-aufheben" disabled={!werkzeug} onClick={() => setWerkzeug(null)}>
+            × Auswahl aufheben
           </button>
-        ))}
-        <button
-          type="button"
-          className={`palette-item palette-radierer${werkzeug?.art === "radierer" ? " aktiv" : ""}`}
-          title="Zugewiesene Schicht durch Klick auf das Kürzel entfernen"
-          onClick={() => setWerkzeug({ art: "radierer" })}
-        >
-          Radierer
-        </button>
-        {werkzeug && (
-          <button type="button" className="palette-item" onClick={() => setWerkzeug(null)}>
-            Auswahl aufheben
-          </button>
-        )}
+        </div>
+
         <span className="hint">
           {werkzeug?.art === "schichtart" &&
             `„${werkzeug.schichtart.bezeichnung}" ausgewählt – Zellen anklicken oder durch Ziehen mehrere Tage auf einmal zuweisen.`}
@@ -387,7 +426,8 @@ export default function PlantafelPage() {
             `„${werkzeug.vorlage.bezeichnung}" ausgewählt – Zelle anklicken, sie ist der erste Tag des Blocks.`}
           {werkzeug?.art === "radierer" &&
             "Radierer aktiv – Kürzel anklicken oder über mehrere Zellen ziehen, um Zuweisungen zu entfernen."}
-          {!werkzeug && "Werkzeug wählen, um Schichten zuzuweisen. Ohne Werkzeug öffnet ein Klick auf ein Kürzel die Details."}
+          {!werkzeug &&
+            "Werkzeug wählen, um Schichten zuzuweisen. Ohne Werkzeug öffnet ein Klick auf ein Kürzel oder eine Freischicht die Details."}
         </span>
       </div>
 
@@ -463,7 +503,22 @@ export default function PlantafelPage() {
                           );
                         })
                       ) : (
-                        <span className="freischicht-hinweis">frei</span>
+                        (() => {
+                          const freiKommentare = freischichtKommentareFuer(m.id, t);
+                          return (
+                            <span
+                              className="freischicht-hinweis"
+                              title={freiKommentare.length > 0 ? `${freiKommentare.length} Kommentar(e)` : undefined}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                freiKlick(m.id, t);
+                              }}
+                            >
+                              frei
+                              {freiKommentare.length > 0 && <span className="kommentar-marker" />}
+                            </span>
+                          );
+                        })()
                       )}
                     </td>
                   );
@@ -488,6 +543,18 @@ export default function PlantafelPage() {
           onSchliessen={() => setDetailId(null)}
           onGeaendert={load}
           onLoeschen={() => zuweisungLoeschen(detailZuweisung)}
+        />
+      )}
+
+      {freischichtDetail && (
+        <FreischichtDetail
+          benutzerId={freischichtDetail.benutzerId}
+          datum={freischichtDetail.datum}
+          planungseinheitId={peId!}
+          mitarbeiterName={mitarbeiter.find((m) => m.id === freischichtDetail.benutzerId)?.name ?? ""}
+          kommentare={freischichtKommentareFuer(freischichtDetail.benutzerId, freischichtDetail.datum)}
+          onSchliessen={() => setFreischichtDetail(null)}
+          onGeaendert={load}
         />
       )}
     </div>
@@ -601,6 +668,105 @@ function ZuweisungDetail({
             Zuweisung löschen
           </button>
         </div>
+      </div>
+    </>
+  );
+}
+
+// Detailfenster einer Freischicht (Tag ohne Zuweisung): auch hier koennen Planer Kommentare
+// hinterlegen -- z. B. um zu vermerken, warum bewusst niemand eingeteilt ist. Ohne
+// "Zuweisung loeschen", da es keine Zuweisung gibt.
+function FreischichtDetail({
+  benutzerId,
+  datum,
+  planungseinheitId,
+  mitarbeiterName,
+  kommentare,
+  onSchliessen,
+  onGeaendert,
+}: {
+  benutzerId: number;
+  datum: string;
+  planungseinheitId: number;
+  mitarbeiterName: string;
+  kommentare: FreischichtKommentar[];
+  onSchliessen: () => void;
+  onGeaendert: () => void;
+}) {
+  const [text, setText] = useState("");
+  const [sichtbarkeit, setSichtbarkeit] = useState<"oeffentlich" | "nur_planer">("nur_planer");
+  const [fehler, setFehler] = useState<string | null>(null);
+
+  async function anlegen(e: FormEvent) {
+    e.preventDefault();
+    if (!text.trim()) return;
+    setFehler(null);
+    try {
+      await api("/freischicht-kommentare", {
+        method: "POST",
+        body: JSON.stringify({ benutzerId, datum, planungseinheitId, text, sichtbarkeit }),
+      });
+      setText("");
+      onGeaendert();
+    } catch (err) {
+      setFehler((err as Error).message);
+    }
+  }
+
+  async function kommentarLoeschen(id: number) {
+    await api(`/freischicht-kommentare/${id}`, { method: "DELETE" });
+    onGeaendert();
+  }
+
+  return (
+    <>
+      <div className="popover-backdrop" onClick={onSchliessen} />
+      <div className="popover">
+        <div className="popover-kopf">
+          <div>
+            <strong>Freischicht</strong>
+            <div className="hint">
+              {mitarbeiterName} · {formatDatum(datum)}
+            </div>
+          </div>
+          <button type="button" className="popover-schliessen" onClick={onSchliessen} title="Schließen">
+            ×
+          </button>
+        </div>
+
+        <div className="kommentar-liste">
+          {kommentare.length === 0 && <p className="empty">Noch keine Kommentare.</p>}
+          {kommentare.map((k) => (
+            <div key={k.id} className="kommentar-eintrag">
+              <div className="kommentar-meta">
+                <span>
+                  {k.autor_name} · {formatDatumZeit(k.erstellt_am)}
+                </span>
+                <span className={`sichtbarkeit-chip${k.sichtbarkeit === "nur_planer" ? " sichtbarkeit-nur-planer" : ""}`}>
+                  {k.sichtbarkeit === "nur_planer" ? "Nur Planer" : "Öffentlich"}
+                </span>
+                <button type="button" onClick={() => kommentarLoeschen(k.id)} title="Kommentar löschen">
+                  ×
+                </button>
+              </div>
+              <div>{k.text}</div>
+            </div>
+          ))}
+        </div>
+
+        <form onSubmit={anlegen} className="kommentar-form">
+          <textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="Kommentar…" rows={2} />
+          <div className="zeile">
+            <select value={sichtbarkeit} onChange={(e) => setSichtbarkeit(e.target.value as "oeffentlich" | "nur_planer")}>
+              <option value="nur_planer">Nur Planer</option>
+              <option value="oeffentlich">Öffentlich</option>
+            </select>
+            <button type="submit" disabled={!text.trim()}>
+              Kommentar speichern
+            </button>
+          </div>
+        </form>
+        {fehler && <div className="error">{fehler}</div>}
       </div>
     </>
   );

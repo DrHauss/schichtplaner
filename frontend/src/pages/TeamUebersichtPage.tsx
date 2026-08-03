@@ -24,12 +24,23 @@ interface Zuweisung {
   kommentare?: ZuweisungKommentar[];
 }
 
+interface FreischichtKommentar {
+  id: number;
+  benutzerId: number;
+  datum: string;
+  autorName: string;
+  text: string;
+  sichtbarkeit: "oeffentlich" | "nur_planer";
+  erstelltAm: string;
+}
+
 interface PlanungseinheitUebersicht {
   id: number;
   name: string;
   standort: string | null;
   mitarbeiter: { id: number; name: string }[];
   zuweisungen: Zuweisung[];
+  freischichtKommentare?: FreischichtKommentar[];
 }
 
 interface FeiertagEintrag {
@@ -177,9 +188,25 @@ export default function TeamUebersichtPage() {
                                     );
                                   })
                                 ) : (
-                                  <span className="freischicht-hinweis" title="Freischicht">
-                                    frei
-                                  </span>
+                                  (() => {
+                                    const freiKommentare = (pe.freischichtKommentare ?? []).filter(
+                                      (k) => k.benutzerId === m.id && k.datum === t
+                                    );
+                                    const titel =
+                                      "Freischicht" +
+                                      (freiKommentare.length > 0
+                                        ? "\n\n" +
+                                          freiKommentare
+                                            .map((k) => `${k.sichtbarkeit === "nur_planer" ? "[nur Planer] " : ""}${k.autorName}: ${k.text}`)
+                                            .join("\n")
+                                        : "");
+                                    return (
+                                      <span className="freischicht-hinweis" title={titel}>
+                                        frei
+                                        {freiKommentare.length > 0 && <span className="kommentar-marker" />}
+                                      </span>
+                                    );
+                                  })()
                                 )}
                               </td>
                             );

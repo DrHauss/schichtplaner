@@ -64,7 +64,18 @@ plantafelRouter.get("/planungseinheiten/:id/plantafel", (req: AuthedRequest, res
       .all(req.params.id, von, bis) as { sichtbarkeit: string }[]
   ).filter((k) => istPlaner || k.sichtbarkeit === "oeffentlich");
 
-  res.json({ mitarbeiter, zuweisungen, schichtarten, bedarf, kommentare });
+  const freischichtKommentare = (
+    db
+      .prepare(
+        `SELECT fk.id, fk.benutzer_id, fk.datum, fk.autor_id, b.name AS autor_name, fk.text, fk.sichtbarkeit, fk.erstellt_am
+         FROM freischicht_kommentar fk JOIN benutzer b ON b.id = fk.autor_id
+         WHERE fk.planungseinheit_id = ? AND fk.datum BETWEEN ? AND ?
+         ORDER BY fk.erstellt_am`
+      )
+      .all(req.params.id, von, bis) as { sichtbarkeit: string }[]
+  ).filter((k) => istPlaner || k.sichtbarkeit === "oeffentlich");
+
+  res.json({ mitarbeiter, zuweisungen, schichtarten, bedarf, kommentare, freischichtKommentare });
 });
 
 // Schicht zuweisen (mit Konfliktpruefung)
@@ -72,6 +83,13 @@ plantafelRouter.post("/zuweisungen", requirePlaner(), (req: AuthedRequest, res) 
   const { benutzerId, schichtartId, datum, planungseinheitId, force } = req.body ?? {};
   if (!benutzerId || !schichtartId || !datum) {
     return res.status(400).json({ error: "benutzerId, schichtartId, datum erforderlich" });
+  }
+  const schichtart = db.prepare("SELECT archiviert FROM schichtart WHERE id = ?").get(schichtartId) as
+    | { archiviert: number }
+    | undefined;
+  if (!schichtart) return res.status(404).json({ error: "Schichtart nicht gefunden" });
+  if (schichtart.archiviert) {
+    return res.status(400).json({ error: "Schichtart ist archiviert -- es koennen keine neuen Zuweisungen mehr angelegt werden" });
   }
   const konflikte = pruefeKonflikte(benutzerId, schichtartId, datum);
   if (konflikte.length > 0 && !force) {
@@ -137,6 +155,47 @@ plantafelRouter.delete("/kommentare/:id", (req: AuthedRequest, res) => {
   res.json({ ok: true });
 });
 
+// Kommentare an Freischichten (Tage ohne Zuweisung): Adresse ist (benutzerId, datum,
+// planungseinheitId) statt einer zuweisung_id -- gleiche Rechte-/Sichtbarkeitslogik wie bei
+// Kommentaren an echten Zuweisungen.
+plantafelRouter.post("/freischicht-kommentare", (req: AuthedRequest, res) => {
+  const { benutzerId, datum, planungseinheitId, text, sichtbarkeit } = req.body ?? {};
+  if (!benutzerId || !datum || !planungseinheitId) {
+    return res.status(400).json({ error: "benutzerId, datum, planungseinheitId erforderlich" });
+  }
+  if (!text || !String(text).trim()) return res.status(400).json({ error: "text erforderlich" });
+  if (!["oeffentlich", "nur_planer"].includes(sichtbarkeit)) {
+    return res.status(400).json({ error: "sichtbarkeit muss 'oeffentlich' oder 'nur_planer' sein" });
+  }
+  if (!istPlanerFuerPlanungseinheit(req, planungseinheitId)) {
+    return res.status(403).json({ error: "Keine Planer-Berechtigung fuer diese Planungseinheit" });
+  }
+  const info = db
+    .prepare(
+      "INSERT INTO freischicht_kommentar (planungseinheit_id, benutzer_id, datum, autor_id, text, sichtbarkeit) VALUES (?,?,?,?,?,?)"
+    )
+    .run(planungseinheitId, benutzerId, datum, req.user!.sub, String(text).trim(), sichtbarkeit);
+  const kommentar = db
+    .prepare(
+      `SELECT fk.id, fk.benutzer_id, fk.datum, fk.autor_id, b.name AS autor_name, fk.text, fk.sichtbarkeit, fk.erstellt_am
+       FROM freischicht_kommentar fk JOIN benutzer b ON b.id = fk.autor_id WHERE fk.id = ?`
+    )
+    .get(info.lastInsertRowid);
+  res.status(201).json(kommentar);
+});
+
+plantafelRouter.delete("/freischicht-kommentare/:id", (req: AuthedRequest, res) => {
+  const kommentar = db.prepare("SELECT planungseinheit_id FROM freischicht_kommentar WHERE id = ?").get(req.params.id) as
+    | { planungseinheit_id: number }
+    | undefined;
+  if (!kommentar) return res.status(404).json({ error: "Kommentar nicht gefunden" });
+  if (!istPlanerFuerPlanungseinheit(req, kommentar.planungseinheit_id)) {
+    return res.status(403).json({ error: "Keine Planer-Berechtigung fuer diese Planungseinheit" });
+  }
+  db.prepare("DELETE FROM freischicht_kommentar WHERE id = ?").run(req.params.id);
+  res.json({ ok: true });
+});
+
 // Ganzen Schichtblock aus einer Vorlage gezielt zuweisen (z. B. "Wochenende Fruehschicht",
 // "Nachtschicht 3er Block") -- direkte Top-down-Zuweisung, unabhaengig von der Schichtboerse.
 plantafelRouter.post("/schichtblock-vorlagen/:id/zuweisen", (req: AuthedRequest, res) => {
@@ -152,9 +211,17 @@ plantafelRouter.post("/schichtblock-vorlagen/:id/zuweisen", (req: AuthedRequest,
   if (!benutzerId || !startDatum) return res.status(400).json({ error: "benutzerId und startDatum erforderlich" });
 
   const eintraege = db
-    .prepare("SELECT tag_offset, schichtart_id FROM schichtblock_vorlage_eintrag WHERE vorlage_id = ? ORDER BY tag_offset")
-    .all(req.params.id) as { tag_offset: number; schichtart_id: number }[];
+    .prepare(
+      `SELECT e.tag_offset, e.schichtart_id, sa.archiviert FROM schichtblock_vorlage_eintrag e
+       JOIN schichtart sa ON sa.id = e.schichtart_id WHERE e.vorlage_id = ? ORDER BY e.tag_offset`
+    )
+    .all(req.params.id) as { tag_offset: number; schichtart_id: number; archiviert: number }[];
   if (eintraege.length === 0) return res.status(400).json({ error: "Vorlage enthaelt keine Eintraege" });
+  if (eintraege.some((e) => e.archiviert)) {
+    return res
+      .status(400)
+      .json({ error: "Vorlage enthaelt eine archivierte Schichtart -- es koennen keine neuen Zuweisungen mehr angelegt werden" });
+  }
 
   const geplant = eintraege.map((e) => {
     const d = new Date(`${startDatum}T00:00:00Z`);

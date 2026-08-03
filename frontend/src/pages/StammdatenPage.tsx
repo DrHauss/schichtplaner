@@ -13,6 +13,7 @@ interface Schichtart {
   pause_min: number;
   stundenwert: number | null;
   ganztags: boolean;
+  archiviert: boolean;
 }
 
 // Zeitwert-Vorschlag aus Beginn/Ende/Pause -- der reine Vorschlag, keine Zwangs-Berechnung,
@@ -150,7 +151,7 @@ function SchichtartenSektion({
   function load() {
     if (peId)
       api<Schichtart[]>(`/planungseinheiten/${peId}/schichtarten`).then((rows) =>
-        setSchichtarten(rows.map((s) => ({ ...s, ganztags: !!s.ganztags })))
+        setSchichtarten(rows.map((s) => ({ ...s, ganztags: !!s.ganztags, archiviert: !!s.archiviert })))
       );
   }
 
@@ -210,6 +211,16 @@ function SchichtartenSektion({
     } catch (err) {
       setError((err as Error).message);
     }
+  }
+
+  // Archivierte Schichtarten bleiben in bestehenden Zuweisungen/der Planung sichtbar, koennen
+  // aber nicht mehr neu zugewiesen werden -- siehe Sperre in routes/plantafel.ts.
+  async function archivierenUmschalten(s: Schichtart) {
+    await api(`/schichtarten/${s.id}/archivieren`, {
+      method: "PUT",
+      body: JSON.stringify({ archiviert: !s.archiviert }),
+    });
+    load();
   }
 
   return (
@@ -304,6 +315,7 @@ function SchichtartenSektion({
             <th>Zeitwert (Std.)</th>
             <th>Farbe</th>
             <th>Kategorie</th>
+            <th>Status</th>
             <th></th>
           </tr>
         </thead>
@@ -381,6 +393,7 @@ function SchichtartenSektion({
                     <option value="abwesenheit">Abwesenheit</option>
                   </select>
                 </td>
+                <td>{editForm.archiviert ? "Archiviert" : "Aktiv"}</td>
                 <td>
                   <button onClick={bearbeitenSpeichern}>Speichern</button>
                   <button
@@ -395,7 +408,7 @@ function SchichtartenSektion({
                 </td>
               </tr>
             ) : (
-              <tr key={s.id}>
+              <tr key={s.id} className={s.archiviert ? "zeile-archiviert" : undefined}>
                 <td>{s.kuerzel}</td>
                 <td>{s.bezeichnung}</td>
                 <td>{s.ganztags ? "ganztägig" : `${s.beginn}–${s.ende}`}</td>
@@ -407,15 +420,19 @@ function SchichtartenSektion({
                   </span>
                 </td>
                 <td>{s.kategorie === "abwesenheit" ? "Abwesenheit" : "Dienst"}</td>
+                <td>{s.archiviert && <span className="badge-typ">Archiviert</span>}</td>
                 <td>
                   <button onClick={() => bearbeitenStart(s)}>Bearbeiten</button>
+                  <button type="button" onClick={() => archivierenUmschalten(s)}>
+                    {s.archiviert ? "Reaktivieren" : "Archivieren"}
+                  </button>
                 </td>
               </tr>
             )
           )}
           {schichtarten.length === 0 && (
             <tr>
-              <td colSpan={8} className="empty">
+              <td colSpan={9} className="empty">
                 Noch keine Schichtart angelegt.
               </td>
             </tr>
@@ -831,7 +848,8 @@ function SchichtblockVorlagenSektion({ peId }: { peId: number }) {
   function laden() {
     api<Schichtart[]>(`/planungseinheiten/${peId}/schichtarten`).then((s) => {
       setSchichtarten(s);
-      setEintraege((prev) => prev.map((e) => ({ ...e, schichtartId: e.schichtartId || s[0]?.id || 0 })));
+      const ersteAktive = s.find((x) => !x.archiviert)?.id ?? 0;
+      setEintraege((prev) => prev.map((e) => ({ ...e, schichtartId: e.schichtartId || ersteAktive })));
     });
     api<Vorlage[]>(`/planungseinheiten/${peId}/schichtblock-vorlagen`).then(setVorlagen);
   }
@@ -847,7 +865,7 @@ function SchichtblockVorlagenSektion({ peId }: { peId: number }) {
         body: JSON.stringify({ bezeichnung, eintraege }),
       });
       setBezeichnung("");
-      setEintraege([{ tagOffset: 0, schichtartId: schichtarten[0]?.id ?? 0 }]);
+      setEintraege([{ tagOffset: 0, schichtartId: schichtarten.find((s) => !s.archiviert)?.id ?? 0 }]);
       laden();
     } catch (err) {
       setError((err as Error).message);
@@ -884,11 +902,13 @@ function SchichtblockVorlagenSektion({ peId }: { peId: number }) {
                 setEintraege(copy);
               }}
             >
-              {schichtarten.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.kuerzel} – {s.bezeichnung}
-                </option>
-              ))}
+              {schichtarten
+                .filter((s) => !s.archiviert)
+                .map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.kuerzel} – {s.bezeichnung}
+                  </option>
+                ))}
             </select>
             {eintraege.length > 1 && (
               <button type="button" onClick={() => setEintraege(eintraege.filter((_, idx) => idx !== i))}>
