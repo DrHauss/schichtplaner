@@ -173,17 +173,15 @@ export default function PlantafelPage() {
   const [werkzeug, setWerkzeug] = useState<Werkzeug | null>(null);
   const [detailId, setDetailId] = useState<number | null>(null);
   const [freischichtDetail, setFreischichtDetail] = useState<{ peId: number; benutzerId: number; datum: string } | null>(null);
-  // Radierer auf einer einzelnen Zelle mit mehreren Eintraegen (Schichten und/oder Bereitschaften):
-  // statt sofort alles zu loeschen, erst nachfragen, ob ein einzelner Eintrag oder alle entfernt
-  // werden sollen. Bei genau einem Eintrag oder beim Ziehen ueber mehrere Zellen entfaellt die
-  // Nachfrage (dort ist "alles in der Zelle/den Zellen loeschen" eindeutig gemeint).
-  const [radiererAuswahl, setRadiererAuswahl] = useState<{
-    peId: number;
-    benutzerId: number;
-    datum: string;
-    zuweisungen: Zuweisung[];
-    bereitschaften: Bereitschaft[];
-  } | null>(null);
+  // Radierer auf einer oder mehreren Zellen mit mehreren Eintraegen (Schichten und/oder
+  // Bereitschaften): statt sofort alles zu loeschen, erst je Zelle nachfragen, ob ein einzelner
+  // Eintrag oder alle entfernt werden sollen. Zellen mit hoechstens einem Eintrag werden dabei
+  // sofort geloescht (dort ist nichts mehrdeutig); Zellen mit mehreren Eintraegen werden in einer
+  // Warteschlange gesammelt und nacheinander per Dialog abgefragt -- auch beim Ziehen ueber
+  // mehrere Felder auf einmal.
+  const [radiererWarteschlange, setRadiererWarteschlange] = useState<
+    { peId: number; benutzerId: number; datum: string; zuweisungen: Zuweisung[]; bereitschaften: Bereitschaft[] }[]
+  >([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -382,42 +380,49 @@ export default function PlantafelPage() {
     load();
   }
 
-  // Radierer auf genau einer Zelle: bei mehr als einem Eintrag (Schichten + Bereitschaften)
-  // erst per Dialog fragen, ob nur ein einzelner oder alle entfernt werden sollen. Beim Ziehen
-  // ueber mehrere Zellen bleibt es beim direkten Loeschen aller Eintraege je Zelle.
+  // Radierer auf einer oder mehreren Zellen (Einzelklick oder Ziehen): Zellen mit hoechstens
+  // einem Eintrag werden sofort geloescht, Zellen mit mehreren Eintraegen (Schicht + Bereitschaft
+  // o.ae.) landen in der Warteschlange und werden nacheinander per Dialog abgefragt.
   function radiererAusloesen(zellen: { peId: number; benutzerId: number; datum: string }[]) {
-    if (zellen.length !== 1) {
-      batchLoeschen(zellen);
-      return;
+    const einfache: { peId: number; benutzerId: number; datum: string }[] = [];
+    const mehrfach: { peId: number; benutzerId: number; datum: string; zuweisungen: Zuweisung[]; bereitschaften: Bereitschaft[] }[] = [];
+    for (const zelle of zellen) {
+      const zuweisungen = zellenZuweisungen(zelle.peId, zelle.benutzerId, zelle.datum);
+      const bereitschaften = zellenBereitschaften(zelle.peId, zelle.benutzerId, zelle.datum);
+      if (zuweisungen.length + bereitschaften.length > 1) {
+        mehrfach.push({ ...zelle, zuweisungen, bereitschaften });
+      } else {
+        einfache.push(zelle);
+      }
     }
-    const [zelle] = zellen;
-    const zuweisungen = zellenZuweisungen(zelle.peId, zelle.benutzerId, zelle.datum);
-    const bereitschaften = zellenBereitschaften(zelle.peId, zelle.benutzerId, zelle.datum);
-    if (zuweisungen.length + bereitschaften.length > 1) {
-      setRadiererAuswahl({ ...zelle, zuweisungen, bereitschaften });
-    } else {
-      batchLoeschen(zellen);
-    }
+    if (einfache.length > 0) batchLoeschen(einfache);
+    if (mehrfach.length > 0) setRadiererWarteschlange((q) => [...q, ...mehrfach]);
   }
 
   async function radiererEinzelnLoeschen(art: "zuweisung" | "bereitschaft", id: number) {
-    if (!radiererAuswahl) return;
+    const aktuelle = radiererWarteschlange[0];
+    if (!aktuelle) return;
     setBusy(true);
     if (art === "zuweisung") {
-      await api(`/zuweisungen/${id}?kommentareBehalten=1&planungseinheitId=${radiererAuswahl.peId}`, { method: "DELETE" });
+      await api(`/zuweisungen/${id}?kommentareBehalten=1&planungseinheitId=${aktuelle.peId}`, { method: "DELETE" });
     } else {
       await api(`/bereitschaften/${id}`, { method: "DELETE" });
     }
     setBusy(false);
-    setRadiererAuswahl(null);
+    setRadiererWarteschlange((q) => q.slice(1));
     load();
   }
 
   function radiererAlleLoeschen() {
-    if (!radiererAuswahl) return;
-    const { peId, benutzerId, datum } = radiererAuswahl;
-    setRadiererAuswahl(null);
+    const aktuelle = radiererWarteschlange[0];
+    if (!aktuelle) return;
+    const { peId, benutzerId, datum } = aktuelle;
+    setRadiererWarteschlange((q) => q.slice(1));
     batchLoeschen([{ peId, benutzerId, datum }]);
+  }
+
+  function radiererUeberspringen() {
+    setRadiererWarteschlange((q) => q.slice(1));
   }
 
   function zieheZelleHinzu(peId: number, benutzerId: number, datum: string) {
@@ -793,15 +798,18 @@ export default function PlantafelPage() {
         />
       )}
 
-      {radiererAuswahl && (
+      {radiererWarteschlange[0] && (
         <RadiererAuswahlDialog
-          auswahl={radiererAuswahl}
-          mitarbeiterName={datenNachPe.get(radiererAuswahl.peId)?.mitarbeiter.find((m) => m.id === radiererAuswahl.benutzerId)?.name ?? ""}
+          auswahl={radiererWarteschlange[0]}
+          mitarbeiterName={
+            datenNachPe.get(radiererWarteschlange[0].peId)?.mitarbeiter.find((m) => m.id === radiererWarteschlange[0].benutzerId)?.name ?? ""
+          }
+          weitereInWarteschlange={radiererWarteschlange.length - 1}
           schichtarten={schichtarten}
           bereitschaftsarten={bereitschaftsarten}
           onEinzeln={radiererEinzelnLoeschen}
           onAlle={radiererAlleLoeschen}
-          onAbbrechen={() => setRadiererAuswahl(null)}
+          onAbbrechen={radiererUeberspringen}
         />
       )}
     </div>
@@ -1025,6 +1033,7 @@ function FreischichtDetail({
 function RadiererAuswahlDialog({
   auswahl,
   mitarbeiterName,
+  weitereInWarteschlange,
   schichtarten,
   bereitschaftsarten,
   onEinzeln,
@@ -1033,6 +1042,7 @@ function RadiererAuswahlDialog({
 }: {
   auswahl: { datum: string; zuweisungen: Zuweisung[]; bereitschaften: Bereitschaft[] };
   mitarbeiterName: string;
+  weitereInWarteschlange: number;
   schichtarten: Schichtart[];
   bereitschaftsarten: Bereitschaftsart[];
   onEinzeln: (art: "zuweisung" | "bereitschaft", id: number) => void;
@@ -1048,6 +1058,7 @@ function RadiererAuswahlDialog({
             <strong>Mehrere Einträge an diesem Tag</strong>
             <div className="hint">
               {mitarbeiterName} · {formatDatum(auswahl.datum)}
+              {weitereInWarteschlange > 0 && ` · noch ${weitereInWarteschlange} weitere Zelle(n) mit mehreren Einträgen`}
             </div>
           </div>
           <button type="button" className="popover-schliessen" onClick={onAbbrechen} title="Schließen">
@@ -1093,7 +1104,7 @@ function RadiererAuswahlDialog({
             Alle löschen
           </button>
           <button type="button" onClick={onAbbrechen}>
-            Abbrechen
+            {weitereInWarteschlange > 0 ? "Diese Zelle überspringen" : "Abbrechen"}
           </button>
         </div>
       </div>
