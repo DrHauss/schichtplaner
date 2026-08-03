@@ -17,7 +17,7 @@ uebersichtRouter.get("/", (req: AuthedRequest, res) => {
     .prepare(
       `SELECT p.id as pe_id, p.name as pe_name, p.standort,
               sz.id as zuweisung_id, sz.datum, sz.benutzer_id, b.name as mitarbeiter_name,
-              sa.id as schichtart_id, sa.kuerzel, sa.bezeichnung, sa.farbe, sa.beginn, sa.ende
+              sa.id as schichtart_id, sa.kuerzel, sa.bezeichnung, sa.farbe, sa.beginn, sa.ende, sa.ganztags
        FROM schicht_zuweisung sz
        JOIN schichtart sa ON sa.id = sz.schichtart_id
        JOIN planungseinheit p ON p.id = sa.planungseinheit_id
@@ -76,6 +76,7 @@ uebersichtRouter.get("/", (req: AuthedRequest, res) => {
       farbe: z.farbe,
       beginn: z.beginn,
       ende: z.ende,
+      ganztags: !!z.ganztags,
       kommentare: kommentareNachZuweisung.get(z.zuweisung_id) ?? [],
     });
   }

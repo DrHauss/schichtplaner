@@ -49,7 +49,10 @@ function upsertSchichtart(
   farbe: string,
   beginn: string,
   ende: string,
-  kategorie: "dienst" | "abwesenheit" = "dienst"
+  kategorie: "dienst" | "abwesenheit" = "dienst",
+  ganztags = false,
+  pauseMin = 30,
+  stundenwert: number | null = 7.5
 ) {
   const existing = db
     .prepare("SELECT id FROM schichtart WHERE planungseinheit_id = ? AND kuerzel = ?")
@@ -57,17 +60,19 @@ function upsertSchichtart(
   if (existing) return existing.id;
   const info = db
     .prepare(
-      "INSERT INTO schichtart (planungseinheit_id, kuerzel, bezeichnung, farbe, beginn, ende, pause_min, stundenwert, kategorie) VALUES (?,?,?,?,?,?,?,?,?)"
+      "INSERT INTO schichtart (planungseinheit_id, kuerzel, bezeichnung, farbe, beginn, ende, pause_min, stundenwert, kategorie, ganztags) VALUES (?,?,?,?,?,?,?,?,?,?)"
     )
-    .run(peId, kuerzel, bezeichnung, farbe, beginn, ende, 30, 7.5, kategorie);
+    .run(peId, kuerzel, bezeichnung, farbe, beginn, ende, pauseMin, stundenwert, kategorie, ganztags ? 1 : 0);
   return Number(info.lastInsertRowid);
 }
 
 const fruehId = upsertSchichtart("F", "Fruehschicht", "#22c55e", "06:00", "14:00");
 const spaetId = upsertSchichtart("S", "Spaetschicht", "#f59e0b", "14:00", "22:00");
 const nachtId = upsertSchichtart("N", "Nachtschicht", "#6366f1", "22:00", "06:00");
-const krankId = upsertSchichtart("K", "Krankheit", "#ef4444", "00:00", "00:00", "abwesenheit");
-const urlaubId = upsertSchichtart("U", "Urlaub", "#94a3b8", "00:00", "00:00", "abwesenheit");
+// Ganztaegige Abwesenheiten: keine Zeitspanne/Pause, Zeitwert bleibt leer (im Admin-Formular
+// frei nachtragbar -- ein pauschaler Wert je Schichtart passt nicht zu Teilzeit-Mitarbeitern).
+const krankId = upsertSchichtart("K", "Krankheit", "#ef4444", "00:00", "00:00", "abwesenheit", true, 0, null);
+const urlaubId = upsertSchichtart("U", "Urlaub", "#94a3b8", "00:00", "00:00", "abwesenheit", true, 0, null);
 
 function upsertVorlage(bezeichnung: string, eintraege: { tagOffset: number; schichtartId: number }[]) {
   const existing = db

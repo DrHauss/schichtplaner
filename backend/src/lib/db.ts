@@ -286,6 +286,10 @@ ensureColumn("terminserie", "mindest_zusagen", "INTEGER");
 // ArbZG-Konfliktpruefung (Ruhezeit) aus -- siehe regelwerk.ts.
 ensureColumn("schichtart", "kategorie", "TEXT NOT NULL DEFAULT 'dienst'");
 
+// Ganztags ist unabhaengig von kategorie (meist gekoppelt an 'abwesenheit', aber nicht erzwungen --
+// z.B. denkbar waere eine ganztaegige Dienst-Schichtart wie "Bereitschaft ganztags").
+ensureColumn("schichtart", "ganztags", "INTEGER NOT NULL DEFAULT 0");
+
 // Taegliche Sollarbeitszeit je Mitarbeiter -- Grundlage fuer die Berechnung der
 // Jahresarbeitszeit ueber die Arbeitstage des Jahres (siehe lib/feiertage.ts).
 ensureColumn("benutzer", "soll_stunden_taeglich", "REAL");

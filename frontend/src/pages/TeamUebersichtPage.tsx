@@ -19,6 +19,7 @@ interface Zuweisung {
   farbe: string;
   beginn: string;
   ende: string;
+  ganztags?: boolean;
   // Der Server liefert 'nur_planer'-Kommentare nur an Planer der jeweiligen Einheit bzw. Admins.
   kommentare?: ZuweisungKommentar[];
 }
@@ -158,7 +159,7 @@ export default function TeamUebersichtPage() {
                                   treffer.map((z) => {
                                     const kommentare = z.kommentare ?? [];
                                     const titel =
-                                      `${z.bezeichnung} (${z.beginn}–${z.ende})` +
+                                      `${z.bezeichnung} (${z.ganztags ? "ganztägig" : `${z.beginn}–${z.ende}`})` +
                                       (kommentare.length > 0
                                         ? "\n\n" +
                                           kommentare
