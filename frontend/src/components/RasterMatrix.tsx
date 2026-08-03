@@ -5,7 +5,7 @@ export interface RasterSpalte {
   bezeichnung: string;
   bedarf: number;
   datumSort: string | null;
-  schichten: { datum: string; kuerzel: string; beginn: string; ende: string }[];
+  schichten: { datum: string; kuerzel: string; beginn: string | null; ende: string | null }[];
 }
 
 export interface RasterZelle {
@@ -32,6 +32,7 @@ export interface RasterZeile {
   vorgaben: RasterVorgabe[];
   vollstaendig: boolean;
   versteckt: boolean;
+  unbeantwortet: number[];
   zellen: Record<number, RasterZelle>;
 }
 
@@ -40,6 +41,13 @@ export function unerfuellteVorgabenText(vorgaben: RasterVorgabe[]): string {
     .filter((v) => !v.erfuellt)
     .map((v) => `${v.bezeichnung}: ${v.zusagenAnzahl}/${v.mindestZusagen}`)
     .join(", ");
+}
+
+// Angebote (Schichtbloecke), fuer die noch ueberhaupt keine Antwort abgegeben wurde -- unabhaengig
+// davon, ob dafuer eine Mindestanzahl-Vorgabe konfiguriert ist.
+export function unbeantworteteAngeboteText(unbeantwortet: number[], spalten: RasterSpalte[]): string {
+  const bezeichnungNachId = new Map(spalten.map((s) => [s.schichtblockId, s.bezeichnung]));
+  return unbeantwortet.map((id) => bezeichnungNachId.get(id) ?? `#${id}`).join(", ");
 }
 
 export type RasterSummen = Record<number, { ja: number; wenn_noetig: number; nein: number }>;

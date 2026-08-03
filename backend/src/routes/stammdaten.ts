@@ -212,6 +212,48 @@ stammdatenRouter.put("/schichtarten/:id/archivieren", (req: AuthedRequest, res) 
   res.json({ ok: true });
 });
 
+// Bereitschaftsarten (On-Call-Dienste) sind wie Schichtarten global -- Verwaltung ohne
+// Planungseinheiten-Bezug, Planer-Berechtigung in irgendeiner Einheit genuegt.
+stammdatenRouter.get("/bereitschaftsarten", (_req, res) => {
+  res.json(db.prepare("SELECT * FROM bereitschaftsart").all());
+});
+
+stammdatenRouter.post("/bereitschaftsarten", (req: AuthedRequest, res) => {
+  if (!istIrgendeinPlaner(req)) return res.status(403).json({ error: "Keine Planer-Berechtigung" });
+  const { kuerzel, bezeichnung, farbe } = req.body ?? {};
+  if (!kuerzel || !bezeichnung) return res.status(400).json({ error: "kuerzel und bezeichnung erforderlich" });
+  const info = db
+    .prepare("INSERT INTO bereitschaftsart (kuerzel, bezeichnung, farbe) VALUES (?,?,?)")
+    .run(kuerzel, bezeichnung, farbe ?? "#a855f7");
+  res.status(201).json({ id: info.lastInsertRowid });
+});
+
+stammdatenRouter.put("/bereitschaftsarten/:id", (req: AuthedRequest, res) => {
+  if (!istIrgendeinPlaner(req)) return res.status(403).json({ error: "Keine Planer-Berechtigung" });
+  const bereitschaftsart = db.prepare("SELECT id FROM bereitschaftsart WHERE id = ?").get(req.params.id);
+  if (!bereitschaftsart) return res.status(404).json({ error: "Bereitschaftsart nicht gefunden" });
+  const { kuerzel, bezeichnung, farbe } = req.body ?? {};
+  if (!kuerzel || !bezeichnung) return res.status(400).json({ error: "kuerzel und bezeichnung erforderlich" });
+  db.prepare("UPDATE bereitschaftsart SET kuerzel=?, bezeichnung=?, farbe=? WHERE id=?").run(
+    kuerzel,
+    bezeichnung,
+    farbe ?? "#a855f7",
+    req.params.id
+  );
+  res.json({ ok: true });
+});
+
+// Archivieren/Reaktivieren: analog zu Schichtarten -- archivierte Bereitschaftsarten bleiben in
+// bestehenden Zuweisungen sichtbar, koennen aber nicht mehr neu zugewiesen werden.
+stammdatenRouter.put("/bereitschaftsarten/:id/archivieren", (req: AuthedRequest, res) => {
+  if (!istIrgendeinPlaner(req)) return res.status(403).json({ error: "Keine Planer-Berechtigung" });
+  const bereitschaftsart = db.prepare("SELECT id FROM bereitschaftsart WHERE id = ?").get(req.params.id);
+  if (!bereitschaftsart) return res.status(404).json({ error: "Bereitschaftsart nicht gefunden" });
+  const { archiviert } = req.body ?? {};
+  db.prepare("UPDATE bereitschaftsart SET archiviert = ? WHERE id = ?").run(archiviert ? 1 : 0, req.params.id);
+  res.json({ ok: true });
+});
+
 // Schichtblock-Vorlagen: wiederverwendbare Muster (z. B. "Wochenende Fruehschicht", "Nachtschicht
 // 3er Block") fuer die direkte Top-down-Zuweisung in der Plantafel (siehe routes/plantafel.ts).
 stammdatenRouter.get("/planungseinheiten/:id/schichtblock-vorlagen", (req, res) => {

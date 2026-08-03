@@ -127,6 +127,17 @@ body {
 .plantafel .plan-zelle.ziehen-markiert { background: #bfdbfe !important; }
 .plantafel .badge { margin: 0.05rem; }
 .badge-entwurf { outline: 2px dashed #f59e0b; outline-offset: 1px; }
+/* Bereitschaften stapeln sich zusaetzlich zu (nicht statt) einer Schicht/Freischicht in der
+   Zelle -- kleinere, runde Chips statt der rechteckigen Schicht-Badges, um "on top of" zu betonen. */
+.bereitschaft-chip {
+  display: inline-block;
+  margin: 0.05rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 999px;
+  color: white;
+  font-size: 0.65rem;
+  vertical-align: middle;
+}
 .kommentar-marker {
   position: absolute;
   top: -3px;

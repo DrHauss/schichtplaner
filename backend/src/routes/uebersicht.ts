@@ -25,10 +25,25 @@ uebersichtRouter.get("/", (req: AuthedRequest, res) => {
        FROM schicht_zuweisung sz
        JOIN schichtart sa ON sa.id = sz.schichtart_id
        JOIN benutzer b ON b.id = sz.benutzer_id
-       JOIN mitgliedschaft m ON m.benutzer_id = sz.benutzer_id AND m.rolle IN ('mitarbeiter','planer')
+       JOIN mitgliedschaft m ON m.benutzer_id = sz.benutzer_id AND m.rolle = 'mitarbeiter'
        JOIN planungseinheit p ON p.id = m.planungseinheit_id
        WHERE sz.status = 'veroeffentlicht' AND sz.datum BETWEEN ? AND ?
        ORDER BY p.name, b.name, sz.datum`
+    )
+    .all(von, bis) as any[];
+
+  // Bereitschaften sind global und teamunabhaengig -- anders als Zuweisungen werden sie NICHT je
+  // Planungseinheit aufgelistet, sondern einmalig fuer die gesamte Uebersicht (siehe ganz oben in
+  // TeamUebersichtPage.tsx).
+  const bereitschaften = db
+    .prepare(
+      `SELECT bz.id, bz.datum, bz.benutzer_id, b.name as mitarbeiter_name,
+              ba.id as bereitschaftsart_id, ba.kuerzel, ba.bezeichnung, ba.farbe
+       FROM bereitschaft_zuweisung bz
+       JOIN bereitschaftsart ba ON ba.id = bz.bereitschaftsart_id
+       JOIN benutzer b ON b.id = bz.benutzer_id
+       WHERE bz.status = 'veroeffentlicht' AND bz.datum BETWEEN ? AND ?
+       ORDER BY ba.bezeichnung, b.name, bz.datum`
     )
     .all(von, bis) as any[];
 
@@ -132,6 +147,16 @@ uebersichtRouter.get("/", (req: AuthedRequest, res) => {
   }[];
 
   res.json({
+    bereitschaften: bereitschaften.map((b) => ({
+      id: b.id,
+      datum: b.datum,
+      benutzerId: b.benutzer_id,
+      mitarbeiterName: b.mitarbeiter_name,
+      bereitschaftsartId: b.bereitschaftsart_id,
+      kuerzel: b.kuerzel,
+      bezeichnung: b.bezeichnung,
+      farbe: b.farbe,
+    })),
     planungseinheiten: alle.map((p) => ({
       ...p,
       // Vollstaendiges Team, nicht nur Personen mit Zuweisung -- sonst fehlen Mitarbeiter ohne
@@ -139,7 +164,7 @@ uebersichtRouter.get("/", (req: AuthedRequest, res) => {
       mitarbeiter: db
         .prepare(
           `SELECT b.id, b.name FROM mitgliedschaft m JOIN benutzer b ON b.id = m.benutzer_id
-           WHERE m.planungseinheit_id = ? AND m.rolle IN ('mitarbeiter','planer') ORDER BY b.name`
+           WHERE m.planungseinheit_id = ? AND m.rolle = 'mitarbeiter' ORDER BY b.name`
         )
         .all(p.id),
       zuweisungen: zuweisungenNachPe.get(p.id) ?? [],

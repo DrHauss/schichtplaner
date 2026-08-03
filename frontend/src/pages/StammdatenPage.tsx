@@ -46,6 +46,14 @@ function zeitwertVorschlag(beginn: string, ende: string, pauseMin: number): numb
   return Math.round((minuten / 60) * 4) / 4; // auf 0,25 Stunden gerundet
 }
 
+interface Bereitschaftsart {
+  id: number;
+  kuerzel: string;
+  bezeichnung: string;
+  farbe: string;
+  archiviert: boolean;
+}
+
 interface VorlageEintrag {
   id: number;
   tag_offset: number;
@@ -133,6 +141,7 @@ export default function StammdatenPage() {
       <h1>Stammdaten</h1>
 
       {einheitenOptionen.length > 0 && <SchichtartenSektion />}
+      {einheitenOptionen.length > 0 && <BereitschaftsartenSektion />}
       {peId != null && <SchichtblockVorlagenSektion peId={peId} />}
       {einheitenOptionen.length > 0 && <FeiertageSektion />}
 
@@ -453,6 +462,159 @@ function SchichtartenSektion() {
             <tr>
               <td colSpan={9} className="empty">
                 Noch keine Schichtart angelegt.
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
+// Bereitschaften (On-Call-Dienste) sind wie Schichtarten global und bewusst eine eigene Entität --
+// keine Schichtart, keine Abwesenheit, mehrfach pro Tag und zusätzlich zu einer Schicht zuweisbar
+// (siehe PlantafelPage.tsx).
+function BereitschaftsartenSektion() {
+  const [bereitschaftsarten, setBereitschaftsarten] = useState<Bereitschaftsart[]>([]);
+  const [kuerzel, setKuerzel] = useState("");
+  const [bezeichnung, setBezeichnung] = useState("");
+  const [farbe, setFarbe] = useState("#a855f7");
+  const [editId, setEditId] = useState<number | null>(null);
+  const [editForm, setEditForm] = useState<Bereitschaftsart | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  function load() {
+    api<Bereitschaftsart[]>("/bereitschaftsarten").then((rows) =>
+      setBereitschaftsarten(
+        [...rows.map((b) => ({ ...b, archiviert: !!b.archiviert }))].sort((a, b) => {
+          const archivDiff = Number(a.archiviert) - Number(b.archiviert);
+          return archivDiff !== 0 ? archivDiff : a.bezeichnung.localeCompare(b.bezeichnung, "de");
+        })
+      )
+    );
+  }
+
+  useEffect(load, []);
+
+  async function anlegen(e: FormEvent) {
+    e.preventDefault();
+    await api("/bereitschaftsarten", { method: "POST", body: JSON.stringify({ kuerzel, bezeichnung, farbe }) });
+    setKuerzel("");
+    setBezeichnung("");
+    load();
+  }
+
+  function bearbeitenStart(b: Bereitschaftsart) {
+    setEditId(b.id);
+    setEditForm({ ...b });
+  }
+
+  async function bearbeitenSpeichern() {
+    if (!editForm) return;
+    setError(null);
+    try {
+      await api(`/bereitschaftsarten/${editForm.id}`, {
+        method: "PUT",
+        body: JSON.stringify({ kuerzel: editForm.kuerzel, bezeichnung: editForm.bezeichnung, farbe: editForm.farbe }),
+      });
+      setEditId(null);
+      setEditForm(null);
+      load();
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  async function archivierenUmschalten(b: Bereitschaftsart) {
+    await api(`/bereitschaftsarten/${b.id}/archivieren`, { method: "PUT", body: JSON.stringify({ archiviert: !b.archiviert }) });
+    load();
+  }
+
+  return (
+    <section>
+      <h2>Bereitschaften</h2>
+      <p className="hint">
+        Bereitschaften gelten global für alle Teams gleichermaßen und sind keine Schichten oder Abwesenheiten --
+        einem Mitarbeiter können pro Tag mehrere Bereitschaften zusätzlich zu einer normalen Schicht zugewiesen werden.
+      </p>
+
+      <form className="card form-inline" onSubmit={anlegen}>
+        <label>
+          Kürzel
+          <input value={kuerzel} onChange={(e) => setKuerzel(e.target.value)} required maxLength={4} />
+        </label>
+        <label>
+          Bezeichnung
+          <input value={bezeichnung} onChange={(e) => setBezeichnung(e.target.value)} required placeholder="z. B. Rufbereitschaft" />
+        </label>
+        <label>
+          Farbe
+          <input type="color" value={farbe} onChange={(e) => setFarbe(e.target.value)} />
+        </label>
+        <button type="submit">Anlegen</button>
+      </form>
+      {error && <div className="error">{error}</div>}
+
+      <table className="table">
+        <thead>
+          <tr>
+            <th>Kürzel</th>
+            <th>Bezeichnung</th>
+            <th>Farbe</th>
+            <th>Status</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {bereitschaftsarten.map((b) =>
+            editId === b.id && editForm ? (
+              <tr key={b.id}>
+                <td>
+                  <input value={editForm.kuerzel} maxLength={4} onChange={(e) => setEditForm({ ...editForm, kuerzel: e.target.value })} />
+                </td>
+                <td>
+                  <input value={editForm.bezeichnung} onChange={(e) => setEditForm({ ...editForm, bezeichnung: e.target.value })} />
+                </td>
+                <td>
+                  <input type="color" value={editForm.farbe} onChange={(e) => setEditForm({ ...editForm, farbe: e.target.value })} />
+                </td>
+                <td>{editForm.archiviert ? "Archiviert" : "Aktiv"}</td>
+                <td>
+                  <button onClick={bearbeitenSpeichern}>Speichern</button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditId(null);
+                      setEditForm(null);
+                    }}
+                  >
+                    Abbrechen
+                  </button>
+                </td>
+              </tr>
+            ) : (
+              <tr key={b.id} className={b.archiviert ? "zeile-archiviert" : undefined}>
+                <td>{b.kuerzel}</td>
+                <td>{b.bezeichnung}</td>
+                <td>
+                  <span className="badge" style={{ background: b.farbe }}>
+                    &nbsp;
+                  </span>
+                </td>
+                <td>{b.archiviert && <span className="badge-typ">Archiviert</span>}</td>
+                <td>
+                  <button onClick={() => bearbeitenStart(b)}>Bearbeiten</button>
+                  <button type="button" onClick={() => archivierenUmschalten(b)}>
+                    {b.archiviert ? "Reaktivieren" : "Archivieren"}
+                  </button>
+                </td>
+              </tr>
+            )
+          )}
+          {bereitschaftsarten.length === 0 && (
+            <tr>
+              <td colSpan={5} className="empty">
+                Noch keine Bereitschaftsart angelegt.
               </td>
             </tr>
           )}

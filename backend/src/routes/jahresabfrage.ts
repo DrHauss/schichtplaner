@@ -1,7 +1,12 @@
 import { Router } from "express";
 import { db } from "../lib/db";
-import { requireAuth, requirePlaner, AuthedRequest } from "../middleware/auth";
-import { requirePlanerFuerAusschreibung, istPlanerFuerPlanungseinheit } from "../lib/berechtigung";
+import { requireAuth, AuthedRequest } from "../middleware/auth";
+import {
+  requirePlanerFuerAusschreibung,
+  istPlanerFuerAusschreibung,
+  istPlanerFuerPlanungseinheit,
+  istIrgendeinPlaner,
+} from "../lib/berechtigung";
 import { berechneTermine, gruppiere, schichtartFuerDatum, Regel, Ausnahme, Gruppierung } from "../lib/terminserie";
 import { baueRaster, schreibeAntworten, legeTeilnehmerAn, erinnereAusstehende, ladeVorgabenStatus, istVollstaendig } from "../lib/jahresabfrage";
 import { berechneVergabevorschlag } from "../lib/vergabevorschlag";
@@ -12,30 +17,43 @@ jahresabfrageRouter.use(requireAuth);
 
 // --- Anlegen ---
 
-jahresabfrageRouter.post("/planungseinheiten/:id/jahresabfragen", requirePlaner("id"), (req: AuthedRequest, res) => {
-  const { titel, zeitraumVon, zeitraumBis, bewerbungsfrist, antwortModus, sichtbarkeit, zugang } = req.body ?? {};
+// planungseinheitIds: [] = global (alle Teams), sonst 1 oder mehrere gezielt gewaehlte Teams --
+// gleiches Muster wie bei den Schichtboerse-Ausschreibungen in boerse.ts.
+jahresabfrageRouter.post("/jahresabfragen", (req: AuthedRequest, res) => {
+  const { titel, zeitraumVon, zeitraumBis, bewerbungsfrist, antwortModus, sichtbarkeit, zugang, planungseinheitIds } = req.body ?? {};
   if (!titel || !zeitraumVon || !zeitraumBis || !bewerbungsfrist) {
     return res.status(400).json({ error: "titel, zeitraumVon, zeitraumBis, bewerbungsfrist erforderlich" });
   }
-  const info = db
-    .prepare(
-      `INSERT INTO ausschreibung
-         (titel, planungseinheit_id, bewerbungsfrist, vergabeverfahren, typ, zeitraum_von, zeitraum_bis, antwort_modus, sichtbarkeit, zugang)
-       VALUES (?,?,?,?,?,?,?,?,?,?)`
-    )
-    .run(
-      titel,
-      req.params.id,
-      bewerbungsfrist,
-      "fairness",
-      "jahresabfrage",
-      zeitraumVon,
-      zeitraumBis,
-      antwortModus ?? "ja_wennnoetig_nein",
-      sichtbarkeit ?? "alle",
-      zugang ?? "link_persoenlich"
-    );
-  res.status(201).json({ id: info.lastInsertRowid });
+  const teamIds: number[] = Array.isArray(planungseinheitIds) ? planungseinheitIds : [];
+  const berechtigt =
+    teamIds.length === 0 ? istIrgendeinPlaner(req) : teamIds.every((id) => istPlanerFuerPlanungseinheit(req, id));
+  if (!berechtigt) return res.status(403).json({ error: "Keine Planer-Berechtigung fuer eines der ausgewaehlten Teams" });
+
+  const ergebnis = db.transaction(() => {
+    const info = db
+      .prepare(
+        `INSERT INTO ausschreibung
+           (titel, bewerbungsfrist, vergabeverfahren, typ, zeitraum_von, zeitraum_bis, antwort_modus, sichtbarkeit, zugang)
+         VALUES (?,?,?,?,?,?,?,?,?)`
+      )
+      .run(
+        titel,
+        bewerbungsfrist,
+        "fairness",
+        "jahresabfrage",
+        zeitraumVon,
+        zeitraumBis,
+        antwortModus ?? "ja_wennnoetig_nein",
+        sichtbarkeit ?? "alle",
+        zugang ?? "link_persoenlich"
+      );
+    const id = info.lastInsertRowid;
+    const insertTeam = db.prepare("INSERT INTO ausschreibung_team (ausschreibung_id, planungseinheit_id) VALUES (?,?)");
+    for (const teamId of teamIds) insertTeam.run(id, teamId);
+    return id;
+  })();
+
+  res.status(201).json({ id: ergebnis });
 });
 
 // --- Terminserien-Generator ---
@@ -67,21 +85,26 @@ jahresabfrageRouter.get("/ausschreibungen/:id/terminserien", (req: AuthedRequest
   res.json(mitAnzahl);
 });
 
+// Eine Terminserie ist entweder ganz Schicht- oder ganz Bereitschafts-basiert (kein Mischen
+// innerhalb einer Serie) -- genau eines von schichtartIds/bereitschaftsartIds wird angegeben.
 jahresabfrageRouter.post("/ausschreibungen/:id/terminserien", (req: AuthedRequest, res) => {
   if (!requirePlanerFuerAusschreibung(req, res, req.params.id)) return;
-  const { bezeichnung, regel, ausnahmen, gruppierung, schichtartIds, personenBedarf, qualifikationId, mindestZusagen } = (req.body ??
-    {}) as {
-    bezeichnung: string;
-    regel: Regel;
-    ausnahmen?: Ausnahme[];
-    gruppierung?: Gruppierung;
-    schichtartIds: number[];
-    personenBedarf?: number;
-    qualifikationId?: number;
-    mindestZusagen?: number;
-  };
-  if (!bezeichnung || !regel || !Array.isArray(schichtartIds) || schichtartIds.length === 0) {
-    return res.status(400).json({ error: "bezeichnung, regel und schichtartIds[] erforderlich" });
+  const { bezeichnung, regel, ausnahmen, gruppierung, schichtartIds, bereitschaftsartIds, personenBedarf, qualifikationId, mindestZusagen } =
+    (req.body ?? {}) as {
+      bezeichnung: string;
+      regel: Regel;
+      ausnahmen?: Ausnahme[];
+      gruppierung?: Gruppierung;
+      schichtartIds?: number[];
+      bereitschaftsartIds?: number[];
+      personenBedarf?: number;
+      qualifikationId?: number;
+      mindestZusagen?: number;
+    };
+  const istBereitschaft = Array.isArray(bereitschaftsartIds) && bereitschaftsartIds.length > 0;
+  const ids = istBereitschaft ? bereitschaftsartIds! : schichtartIds;
+  if (!bezeichnung || !regel || !Array.isArray(ids) || ids.length === 0) {
+    return res.status(400).json({ error: "bezeichnung, regel und schichtartIds[] oder bereitschaftsartIds[] erforderlich" });
   }
 
   let termine: string[];
@@ -95,20 +118,21 @@ jahresabfrageRouter.post("/ausschreibungen/:id/terminserien", (req: AuthedReques
   const bloecke = gruppiere(termine, gruppierung ?? "pro_termin", bezeichnung);
 
   const insertSerie = db.prepare(
-    `INSERT INTO terminserie (ausschreibung_id, bezeichnung, regel, schichtart_ids, personen_bedarf, qualifikation_id, ausnahmen, mindest_zusagen)
-     VALUES (?,?,?,?,?,?,?,?)`
+    `INSERT INTO terminserie (ausschreibung_id, bezeichnung, regel, schichtart_ids, bereitschaftsart_ids, personen_bedarf, qualifikation_id, ausnahmen, mindest_zusagen)
+     VALUES (?,?,?,?,?,?,?,?,?)`
   );
   const insertBlock = db.prepare(
     "INSERT INTO schichtblock (ausschreibung_id, bezeichnung, personen_bedarf, qualifikation_id, terminserie_id, datum_sort) VALUES (?,?,?,?,?,?)"
   );
-  const insertSchicht = db.prepare("INSERT INTO blockschicht (schichtblock_id, datum, schichtart_id) VALUES (?,?,?)");
+  const insertSchicht = db.prepare("INSERT INTO blockschicht (schichtblock_id, datum, schichtart_id, bereitschaftsart_id) VALUES (?,?,?,?)");
 
   const ergebnis = db.transaction(() => {
     const serieInfo = insertSerie.run(
       req.params.id,
       bezeichnung,
       JSON.stringify(regel),
-      JSON.stringify(schichtartIds),
+      istBereitschaft ? "[]" : JSON.stringify(ids),
+      istBereitschaft ? JSON.stringify(ids) : null,
       personenBedarf ?? 1,
       qualifikationId ?? null,
       JSON.stringify(ausnahmen ?? []),
@@ -118,7 +142,8 @@ jahresabfrageRouter.post("/ausschreibungen/:id/terminserien", (req: AuthedReques
     for (const block of bloecke) {
       const blockInfo = insertBlock.run(req.params.id, block.bezeichnung, personenBedarf ?? 1, qualifikationId ?? null, serieId, block.termine[0]);
       for (const datum of block.termine) {
-        insertSchicht.run(blockInfo.lastInsertRowid, datum, schichtartFuerDatum(datum, regel, schichtartIds));
+        const gewaehlteId = schichtartFuerDatum(datum, regel, ids);
+        insertSchicht.run(blockInfo.lastInsertRowid, datum, istBereitschaft ? null : gewaehlteId, istBereitschaft ? gewaehlteId : null);
       }
     }
     return serieId;
@@ -289,11 +314,9 @@ jahresabfrageRouter.put("/ausschreibungen/:id/gruppen/:gid/mindestzusagen/:teiln
 // --- Rasteransicht ---
 
 jahresabfrageRouter.get("/ausschreibungen/:id/raster", (req: AuthedRequest, res) => {
-  const ausschreibung = db.prepare("SELECT planungseinheit_id FROM ausschreibung WHERE id = ?").get(req.params.id) as
-    | { planungseinheit_id: number }
-    | undefined;
+  const ausschreibung = db.prepare("SELECT id FROM ausschreibung WHERE id = ?").get(req.params.id);
   if (!ausschreibung) return res.status(404).json({ error: "Nicht gefunden" });
-  const istPlaner = istPlanerFuerPlanungseinheit(req, ausschreibung.planungseinheit_id);
+  const istPlaner = istPlanerFuerAusschreibung(req, req.params.id);
   const raster = baueRaster(req.params.id, { requesterBenutzerId: req.user!.sub, istPlaner });
   res.json(raster);
 });
@@ -316,17 +339,29 @@ jahresabfrageRouter.get("/ausschreibungen/:id/teilnehmer", (req: AuthedRequest, 
 
 jahresabfrageRouter.post("/ausschreibungen/:id/teilnehmer", (req: AuthedRequest, res) => {
   if (!requirePlanerFuerAusschreibung(req, res, req.params.id)) return;
-  const ausschreibung = db.prepare("SELECT * FROM ausschreibung WHERE id = ?").get(req.params.id) as any;
   const { teilnehmer, ausMitarbeitern } = req.body ?? {};
+
+  const teamIds = (
+    db.prepare("SELECT planungseinheit_id FROM ausschreibung_team WHERE ausschreibung_id = ?").all(req.params.id) as {
+      planungseinheit_id: number;
+    }[]
+  ).map((t) => t.planungseinheit_id);
 
   const eintraege: { name: string; email?: string; wunschAnzahl?: number; benutzerId?: number }[] = [];
   if (ausMitarbeitern) {
-    const mitarbeiter = db
-      .prepare(
-        `SELECT b.id, b.name, b.email FROM mitgliedschaft m JOIN benutzer b ON b.id = m.benutzer_id
-         WHERE m.planungseinheit_id = ? AND m.rolle = 'mitarbeiter'`
-      )
-      .all(ausschreibung.planungseinheit_id) as any[];
+    // Ohne verknuepftes Team (globale Ausschreibung) zaehlen alle Mitarbeiter systemweit als
+    // Teilnehmerkreis, sonst die Mitarbeiter der verknuepften Teams.
+    const mitarbeiter = (
+      teamIds.length === 0
+        ? db.prepare(
+            `SELECT DISTINCT b.id, b.name, b.email FROM mitgliedschaft m JOIN benutzer b ON b.id = m.benutzer_id
+             WHERE m.rolle = 'mitarbeiter'`
+          )
+        : db.prepare(
+            `SELECT DISTINCT b.id, b.name, b.email FROM mitgliedschaft m JOIN benutzer b ON b.id = m.benutzer_id
+             WHERE m.rolle = 'mitarbeiter' AND m.planungseinheit_id IN (${teamIds.map(() => "?").join(",")})`
+          )
+    ).all(...(teamIds.length === 0 ? [] : teamIds)) as any[];
     for (const m of mitarbeiter) eintraege.push({ name: m.name, email: m.email, benutzerId: m.id });
   }
   if (Array.isArray(teilnehmer)) {
@@ -334,7 +369,12 @@ jahresabfrageRouter.post("/ausschreibungen/:id/teilnehmer", (req: AuthedRequest,
   }
   if (eintraege.length === 0) return res.status(400).json({ error: "teilnehmer[] oder ausMitarbeitern erforderlich" });
 
-  const angelegt = eintraege.map((e) => legeTeilnehmerAn(req.params.id, ausschreibung.planungseinheit_id, e));
+  // Neu angelegte Teilnehmer (ohne bestehendes Konto) werden Mitglied des ersten verknuepften
+  // Teams, damit sie ueberhaupt irgendwo im Roster (Plantafel etc.) auftauchen; bei einer
+  // globalen Ausschreibung gibt es kein eindeutig "zustaendiges" Team, dann bleibt es dabei,
+  // dass nur ein Konto ohne Mitgliedschaft angelegt wird.
+  const primaryTeamId = teamIds[0] ?? null;
+  const angelegt = eintraege.map((e) => legeTeilnehmerAn(req.params.id, primaryTeamId, e));
   res.status(201).json({ anzahl: angelegt.length, teilnehmer: angelegt });
 });
 

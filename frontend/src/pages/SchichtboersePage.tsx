@@ -1,8 +1,13 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { formatDatumZeit } from "../lib/datum";
+
+interface Team {
+  id: number;
+  name: string;
+}
 
 interface Ausschreibung {
   id: number;
@@ -12,18 +17,55 @@ interface Ausschreibung {
   status: "entwurf" | "veroeffentlicht" | "geschlossen";
   erstellt_am: string;
   typ: "runde" | "jahresabfrage";
+  teams: Team[];
+}
+
+// Team-Checkboxen fuer die Anlage-Formulare: leere Auswahl = Ausschreibung gilt global (alle
+// Teams/alle Mitarbeiter), sonst 1 oder mehrere gezielt gewaehlte Teams -- Ausschreibungen sind
+// nicht mehr zwingend an genau ein Team gebunden.
+function TeamAuswahl({ teams, ausgewaehlt, onChange }: { teams: Team[]; ausgewaehlt: number[]; onChange: (ids: number[]) => void }) {
+  return (
+    <div className="wochentage-auswahl">
+      {teams.map((t) => (
+        <label key={t.id} className="wochentag-checkbox">
+          <input
+            type="checkbox"
+            checked={ausgewaehlt.includes(t.id)}
+            onChange={(e) => onChange(e.target.checked ? [...ausgewaehlt, t.id] : ausgewaehlt.filter((x) => x !== t.id))}
+          />
+          {t.name}
+        </label>
+      ))}
+      {teams.length === 0 && <span className="empty">Keine eigenen Teams.</span>}
+    </div>
+  );
 }
 
 export default function SchichtboersePage() {
   const navigate = useNavigate();
   const { mitgliedschaften, user } = useAuth();
-  const planerEinheiten = mitgliedschaften.filter((m) => m.rolle === "planer" || user?.istAdmin);
-  const alleEinheiten = mitgliedschaften;
-  const [peId, setPeId] = useState<number | null>(alleEinheiten[0]?.planungseinheit_id ?? null);
+
+  // Administratoren duerfen laut Backend ueberall planen, haben aber oft keine Mitgliedschaft --
+  // fuer sie werden alle Planungseinheiten als "eigene" Teams geladen (analog PlantafelPage).
+  const [adminEinheiten, setAdminEinheiten] = useState<Team[]>([]);
+  useEffect(() => {
+    if (user?.istAdmin) api<Team[]>("/planungseinheiten").then(setAdminEinheiten);
+  }, [user?.istAdmin]);
+
+  const eigenePlanerTeams = useMemo<Team[]>(
+    () =>
+      user?.istAdmin
+        ? adminEinheiten
+        : mitgliedschaften.filter((m) => m.rolle === "planer").map((m) => ({ id: m.planungseinheit_id, name: m.planungseinheit_name })),
+    [mitgliedschaften, adminEinheiten, user?.istAdmin]
+  );
+  const kannAnlegen = eigenePlanerTeams.length > 0;
+
   const [ausschreibungen, setAusschreibungen] = useState<Ausschreibung[]>([]);
   const [neuTitel, setNeuTitel] = useState("");
   const [neuFrist, setNeuFrist] = useState("");
   const [neuVerfahren, setNeuVerfahren] = useState("fairness");
+  const [neuTeamIds, setNeuTeamIds] = useState<number[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -31,32 +73,29 @@ export default function SchichtboersePage() {
   const [jaVon, setJaVon] = useState("");
   const [jaBis, setJaBis] = useState("");
   const [jaFrist, setJaFrist] = useState("");
+  const [jaTeamIds, setJaTeamIds] = useState<number[]>([]);
   const [jaBusy, setJaBusy] = useState(false);
   const [jaError, setJaError] = useState<string | null>(null);
 
-  const istPlanerHier = planerEinheiten.some((m) => m.planungseinheit_id === peId);
-
-  function load(pe: number) {
-    api<Ausschreibung[]>(`/planungseinheiten/${pe}/ausschreibungen`).then(setAusschreibungen);
+  function load() {
+    api<Ausschreibung[]>("/ausschreibungen").then(setAusschreibungen);
   }
 
-  useEffect(() => {
-    if (peId) load(peId);
-  }, [peId]);
+  useEffect(load, []);
 
   async function anlegen(e: FormEvent) {
     e.preventDefault();
-    if (!peId) return;
     setBusy(true);
     setError(null);
     try {
-      await api(`/planungseinheiten/${peId}/ausschreibungen`, {
+      await api("/ausschreibungen", {
         method: "POST",
-        body: JSON.stringify({ titel: neuTitel, bewerbungsfrist: neuFrist, vergabeverfahren: neuVerfahren }),
+        body: JSON.stringify({ titel: neuTitel, bewerbungsfrist: neuFrist, vergabeverfahren: neuVerfahren, planungseinheitIds: neuTeamIds }),
       });
       setNeuTitel("");
       setNeuFrist("");
-      load(peId);
+      setNeuTeamIds([]);
+      load();
     } catch (err) {
       setError((err as Error).message);
     } finally {
@@ -66,24 +105,25 @@ export default function SchichtboersePage() {
 
   async function jahresabfrageAnlegen(e: FormEvent) {
     e.preventDefault();
-    if (!peId) return;
     setJaBusy(true);
     setJaError(null);
     try {
-      const res = await api<{ id: number }>(`/planungseinheiten/${peId}/jahresabfragen`, {
+      const res = await api<{ id: number }>("/jahresabfragen", {
         method: "POST",
         body: JSON.stringify({
           titel: jaTitel,
           zeitraumVon: jaVon,
           zeitraumBis: jaBis,
           bewerbungsfrist: jaFrist,
+          planungseinheitIds: jaTeamIds,
         }),
       });
       setJaTitel("");
       setJaVon("");
       setJaBis("");
       setJaFrist("");
-      load(peId);
+      setJaTeamIds([]);
+      load();
       navigate(`/schichtboerse/jahresabfrage/${res.id}`);
     } catch (err) {
       setJaError((err as Error).message);
@@ -96,20 +136,7 @@ export default function SchichtboersePage() {
     <div className="page">
       <h1>Schichtbörse</h1>
 
-      {alleEinheiten.length > 1 && (
-        <label className="inline-label">
-          Planungseinheit
-          <select value={peId ?? ""} onChange={(e) => setPeId(Number(e.target.value))}>
-            {alleEinheiten.map((m) => (
-              <option key={m.planungseinheit_id} value={m.planungseinheit_id}>
-                {m.planungseinheit_name}
-              </option>
-            ))}
-          </select>
-        </label>
-      )}
-
-      {istPlanerHier && (
+      {kannAnlegen && (
         <form className="card form-inline" onSubmit={anlegen}>
           <h2>Neue Ausschreibungsrunde</h2>
           <label>
@@ -127,6 +154,8 @@ export default function SchichtboersePage() {
               <option value="fairness">Fairness-Vorschlag</option>
             </select>
           </label>
+          <label>Teams (keine Auswahl = gilt für alle Teams)</label>
+          <TeamAuswahl teams={eigenePlanerTeams} ausgewaehlt={neuTeamIds} onChange={setNeuTeamIds} />
           <button type="submit" disabled={busy}>
             Anlegen
           </button>
@@ -134,7 +163,7 @@ export default function SchichtboersePage() {
         </form>
       )}
 
-      {istPlanerHier && (
+      {kannAnlegen && (
         <form className="card form-inline" onSubmit={jahresabfrageAnlegen}>
           <h2>Neue Jahresabfrage</h2>
           <label>
@@ -153,6 +182,8 @@ export default function SchichtboersePage() {
             Bewerbungsfrist
             <input type="datetime-local" value={jaFrist} onChange={(e) => setJaFrist(e.target.value)} required />
           </label>
+          <label>Teams (keine Auswahl = gilt für alle Teams)</label>
+          <TeamAuswahl teams={eigenePlanerTeams} ausgewaehlt={jaTeamIds} onChange={setJaTeamIds} />
           <button type="submit" disabled={jaBusy}>
             Anlegen
           </button>
@@ -168,6 +199,7 @@ export default function SchichtboersePage() {
         <thead>
           <tr>
             <th>Titel</th>
+            <th>Team</th>
             <th>Bewerbungsfrist</th>
             <th>Verfahren</th>
             <th>Status</th>
@@ -181,6 +213,7 @@ export default function SchichtboersePage() {
                 {a.titel}
                 {a.typ === "jahresabfrage" && <span className="badge-typ"> Jahresabfrage</span>}
               </td>
+              <td>{a.teams.length > 0 ? a.teams.map((t) => t.name).join(", ") : "Alle Teams"}</td>
               <td>{formatDatumZeit(a.bewerbungsfrist)}</td>
               <td>{a.vergabeverfahren}</td>
               <td>
@@ -195,7 +228,7 @@ export default function SchichtboersePage() {
           ))}
           {ausschreibungen.length === 0 && (
             <tr>
-              <td colSpan={5} className="empty">
+              <td colSpan={6} className="empty">
                 Keine Ausschreibungen vorhanden.
               </td>
             </tr>

@@ -2,21 +2,27 @@ import { Response } from "express";
 import { db } from "./db";
 import { AuthedRequest } from "../middleware/auth";
 
+// Eine Ausschreibung/Jahresabfrage ist an 0, 1 oder mehrere Planungseinheiten gebunden (siehe
+// ausschreibung_team) -- 0 Teams = global, dort genuegt Planer irgendeiner Einheit (gleiches
+// Prinzip wie istIrgendeinPlaner), sonst genuegt Planer einer der verknuepften Teams.
+export function istPlanerFuerAusschreibung(req: AuthedRequest, ausschreibungId: string | number): boolean {
+  if (req.user!.istAdmin) return true;
+  const teams = db
+    .prepare("SELECT planungseinheit_id FROM ausschreibung_team WHERE ausschreibung_id = ?")
+    .all(ausschreibungId) as { planungseinheit_id: number }[];
+  if (teams.length === 0) return istIrgendeinPlaner(req);
+  return teams.some((t) => istPlanerFuerPlanungseinheit(req, t.planungseinheit_id));
+}
+
 // Prueft und beantwortet bei Bedarf direkt (404/403); Rueckgabewert gibt an, ob weitergemacht werden darf.
 export function requirePlanerFuerAusschreibung(req: AuthedRequest, res: Response, ausschreibungId: string): boolean {
-  if (req.user!.istAdmin) return true;
-  const ausschreibung = db.prepare("SELECT planungseinheit_id FROM ausschreibung WHERE id = ?").get(ausschreibungId) as
-    | { planungseinheit_id: number }
-    | undefined;
+  const ausschreibung = db.prepare("SELECT id FROM ausschreibung WHERE id = ?").get(ausschreibungId);
   if (!ausschreibung) {
     res.status(404).json({ error: "Ausschreibung nicht gefunden" });
     return false;
   }
-  const istPlaner = db
-    .prepare("SELECT 1 FROM mitgliedschaft WHERE benutzer_id = ? AND planungseinheit_id = ? AND rolle = 'planer'")
-    .get(req.user!.sub, ausschreibung.planungseinheit_id);
-  if (!istPlaner) {
-    res.status(403).json({ error: "Keine Planer-Berechtigung fuer diese Planungseinheit" });
+  if (!istPlanerFuerAusschreibung(req, ausschreibungId)) {
+    res.status(403).json({ error: "Keine Planer-Berechtigung fuer diese Ausschreibung" });
     return false;
   }
   return true;

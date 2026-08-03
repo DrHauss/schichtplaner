@@ -54,11 +54,37 @@ interface Planungseinheit {
   id: number;
   name: string;
 }
+// Bereitschaften sind keine Schichten oder Abwesenheiten -- eigene, orthogonale Zuweisung, die
+// zusaetzlich zu (nicht statt) einer normalen Schicht am selben Tag bestehen kann.
+interface Bereitschaftsart {
+  id: number;
+  kuerzel: string;
+  bezeichnung: string;
+  farbe: string;
+  archiviert: boolean | number;
+}
+interface Bereitschaft {
+  id: number;
+  benutzer_id: number;
+  bereitschaftsart_id: number;
+  datum: string;
+  status: string;
+}
+interface PlantafelDaten {
+  mitarbeiter: Mitarbeiter[];
+  zuweisungen: Zuweisung[];
+  schichtarten: Schichtart[];
+  kommentare: Kommentar[];
+  freischichtKommentare: FreischichtKommentar[];
+  bereitschaften: Bereitschaft[];
+  bereitschaftsarten: Bereitschaftsart[];
+}
 
 // Werkzeug der Palette: einmal auswaehlen, dann Zellen anklicken (Stempel-Prinzip).
 type Werkzeug =
   | { art: "schichtart"; schichtart: Schichtart }
-  | { art: "vorlage"; vorlage: Vorlage }
+  | { art: "bereitschaft"; bereitschaftsart: Bereitschaftsart }
+  | { art: "vorlage"; peId: number; vorlage: Vorlage }
   | { art: "radierer" };
 
 const WOCHENTAGE_KURZ = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
@@ -81,19 +107,22 @@ function nachDienstUndAbwesenheitGruppiert<
   };
 }
 
-function wochenTage(startMontag: Date) {
-  return Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(startMontag);
-    d.setDate(d.getDate() + i);
-    return d.toISOString().slice(0, 10);
+function heuteJahrMonat() {
+  const d = new Date();
+  return { jahr: d.getFullYear(), monat: d.getMonth() + 1 };
+}
+
+function tageDesMonats(jahr: number, monat: number): string[] {
+  const letzterTag = new Date(jahr, monat, 0).getDate();
+  return Array.from({ length: letzterTag }, (_, i) => {
+    const tag = i + 1;
+    return `${jahr}-${String(monat).padStart(2, "0")}-${String(tag).padStart(2, "0")}`;
   });
 }
 
-function montagDieserWoche() {
-  const d = new Date();
-  const tag = (d.getDay() + 6) % 7;
-  d.setDate(d.getDate() - tag);
-  return d;
+function wochentagKurz(datumIso: string): string {
+  const d = new Date(`${datumIso}T00:00:00`);
+  return WOCHENTAGE_KURZ[(d.getDay() + 6) % 7];
 }
 
 function istWochenende(datumIso: string): boolean {
@@ -110,6 +139,9 @@ function konfliktText(err: unknown): string | null {
   return konflikte.map((k) => (k.datum ? `${formatDatum(k.datum)}: ${k.meldung}` : k.meldung)).join("\n");
 }
 
+// Die Plantafel zeigt -- wie die Team-Uebersicht -- eine Monatsansicht mit allen eigenen Teams
+// gleichzeitig, statt einer Woche eines einzeln ausgewaehlten Teams. Jedes Team bekommt eine
+// eigene Sektion mit eigenem Monatsraster; Werkzeugleiste und Monatsnavigation sind gemeinsam.
 export default function PlantafelPage() {
   const { user, mitgliedschaften } = useAuth();
   const planerEinheiten = mitgliedschaften.filter((m) => m.rolle === "planer");
@@ -130,76 +162,90 @@ export default function PlantafelPage() {
     [mitgliedschaften, adminEinheiten]
   );
 
-  const [peId, setPeId] = useState<number | null>(null);
-  useEffect(() => {
-    if (peId == null && einheiten.length > 0) setPeId(einheiten[0].id);
-  }, [einheiten, peId]);
+  const [{ jahr, monat }, setMonat] = useState(heuteJahrMonat());
+  const tage = useMemo(() => tageDesMonats(jahr, monat), [jahr, monat]);
 
-  const [woche, setWoche] = useState(montagDieserWoche());
-  const [mitarbeiter, setMitarbeiter] = useState<Mitarbeiter[]>([]);
+  const [datenNachPe, setDatenNachPe] = useState<Map<number, PlantafelDaten>>(new Map());
+  const [vorlagenNachPe, setVorlagenNachPe] = useState<Map<number, Vorlage[]>>(new Map());
   const [schichtarten, setSchichtarten] = useState<Schichtart[]>([]);
-  const [zuweisungen, setZuweisungen] = useState<Zuweisung[]>([]);
-  const [kommentare, setKommentare] = useState<Kommentar[]>([]);
-  const [freischichtKommentare, setFreischichtKommentare] = useState<FreischichtKommentar[]>([]);
-  const [vorlagen, setVorlagen] = useState<Vorlage[]>([]);
+  const [bereitschaftsarten, setBereitschaftsarten] = useState<Bereitschaftsart[]>([]);
   const [feiertage, setFeiertage] = useState<Set<string>>(new Set());
   const [werkzeug, setWerkzeug] = useState<Werkzeug | null>(null);
   const [detailId, setDetailId] = useState<number | null>(null);
-  const [freischichtDetail, setFreischichtDetail] = useState<{ benutzerId: number; datum: string } | null>(null);
+  const [freischichtDetail, setFreischichtDetail] = useState<{ peId: number; benutzerId: number; datum: string } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   // Ziehen: nach Auswahl von Schichtart oder Radierer koennen mehrere Zellen in einem Zug
   // erfasst werden (Maus gedrueckt halten, ueber Zellen fahren, loslassen). Die erfassten Zellen
   // liegen in einer Ref (kein Re-Render pro Eintrag), ein Tick-Zaehler stoesst die Neuzeichnung
-  // fuer die Ziehen-Markierung an.
-  const dragZellenRef = useRef<Map<string, { benutzerId: number; datum: string }>>(new Map());
+  // fuer die Ziehen-Markierung an. Der Schluessel enthaelt die peId, da derselbe Mitarbeiter am
+  // selben Tag in mehreren Team-Sektionen auftauchen kann.
+  const dragZellenRef = useRef<Map<string, { peId: number; benutzerId: number; datum: string }>>(new Map());
   const [dragAktiv, setDragAktiv] = useState(false);
   const [, setDragTick] = useState(0);
 
-  const tage = useMemo(() => wochenTage(woche), [woche]);
+  async function load() {
+    if (einheiten.length === 0) return;
+    const von = tage[0];
+    const bis = tage[tage.length - 1];
+    const ergebnisse = await Promise.all(
+      einheiten.map((pe) => api<PlantafelDaten>(`/planungseinheiten/${pe.id}/plantafel?von=${von}&bis=${bis}`))
+    );
+    const neueDaten = new Map<number, PlantafelDaten>();
+    einheiten.forEach((pe, i) => neueDaten.set(pe.id, ergebnisse[i]));
+    setDatenNachPe(neueDaten);
+    if (ergebnisse[0]) {
+      setSchichtarten(ergebnisse[0].schichtarten);
+      setBereitschaftsarten(ergebnisse[0].bereitschaftsarten);
+    }
 
-  function load() {
-    if (!peId) return;
-    api<{
-      mitarbeiter: Mitarbeiter[];
-      zuweisungen: Zuweisung[];
-      schichtarten: Schichtart[];
-      kommentare: Kommentar[];
-      freischichtKommentare: FreischichtKommentar[];
-    }>(`/planungseinheiten/${peId}/plantafel?von=${tage[0]}&bis=${tage[6]}`).then((d) => {
-      setMitarbeiter(d.mitarbeiter);
-      setZuweisungen(d.zuweisungen);
-      setSchichtarten(d.schichtarten);
-      setKommentare(d.kommentare ?? []);
-      setFreischichtKommentare(d.freischichtKommentare ?? []);
-    });
-    api<Vorlage[]>(`/planungseinheiten/${peId}/schichtblock-vorlagen`).then(setVorlagen);
+    const vorlagenErgebnisse = await Promise.all(
+      einheiten.map((pe) => api<Vorlage[]>(`/planungseinheiten/${pe.id}/schichtblock-vorlagen`))
+    );
+    const neueVorlagen = new Map<number, Vorlage[]>();
+    einheiten.forEach((pe, i) => neueVorlagen.set(pe.id, vorlagenErgebnisse[i]));
+    setVorlagenNachPe(neueVorlagen);
   }
 
   useEffect(() => {
     load();
     setDetailId(null);
     setFreischichtDetail(null);
-  }, [peId, woche]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [einheiten.map((e) => e.id).join(","), jahr, monat]);
 
   useEffect(() => {
-    const jahr = Number(tage[0].slice(0, 4));
     api<{ datum: string; istFrei: boolean }[]>(`/feiertage?jahr=${jahr}`).then((f) =>
       setFeiertage(new Set(f.filter((x) => x.istFrei).map((x) => x.datum)))
     );
-  }, [tage[0].slice(0, 4)]);
+  }, [jahr]);
 
-  function zellenZuweisungen(benutzerId: number, datum: string) {
-    return zuweisungen.filter((z) => z.benutzer_id === benutzerId && z.datum === datum);
+  function monatWechseln(delta: number) {
+    setMonat(({ jahr, monat }) => {
+      const d = new Date(jahr, monat - 1 + delta, 1);
+      return { jahr: d.getFullYear(), monat: d.getMonth() + 1 };
+    });
   }
 
-  function kommentareFuer(zuweisungId: number) {
-    return kommentare.filter((k) => k.zuweisung_id === zuweisungId);
+  function zellenZuweisungen(peId: number, benutzerId: number, datum: string) {
+    const daten = datenNachPe.get(peId);
+    if (!daten) return [];
+    return daten.zuweisungen.filter((z) => z.benutzer_id === benutzerId && z.datum === datum);
   }
 
-  function freischichtKommentareFuer(benutzerId: number, datum: string) {
-    return freischichtKommentare.filter((k) => k.benutzer_id === benutzerId && k.datum === datum);
+  function zellenBereitschaften(peId: number, benutzerId: number, datum: string) {
+    const daten = datenNachPe.get(peId);
+    if (!daten) return [];
+    return daten.bereitschaften.filter((b) => b.benutzer_id === benutzerId && b.datum === datum);
+  }
+
+  function kommentareFuer(peId: number, zuweisungId: number) {
+    return (datenNachPe.get(peId)?.kommentare ?? []).filter((k) => k.zuweisung_id === zuweisungId);
+  }
+
+  function freischichtKommentareFuer(peId: number, benutzerId: number, datum: string) {
+    return (datenNachPe.get(peId)?.freischichtKommentare ?? []).filter((k) => k.benutzer_id === benutzerId && k.datum === datum);
   }
 
   // Ein POST, bei Konflikten (409) Rueckfrage mit den konkreten Meldungen und Wiederholung mit force.
@@ -219,7 +265,7 @@ export default function PlantafelPage() {
     load();
   }
 
-  async function zelleKlick(benutzerId: number, datum: string) {
+  async function zelleKlick(peId: number, benutzerId: number, datum: string) {
     if (!werkzeug || busy) return;
     setBusy(true);
     try {
@@ -227,6 +273,13 @@ export default function PlantafelPage() {
         await postMitKonfliktabfrage("/zuweisungen", {
           benutzerId,
           schichtartId: werkzeug.schichtart.id,
+          datum,
+          planungseinheitId: peId,
+        });
+      } else if (werkzeug.art === "bereitschaft") {
+        await postMitKonfliktabfrage("/bereitschaften", {
+          benutzerId,
+          bereitschaftsartId: werkzeug.bereitschaftsart.id,
           datum,
           planungseinheitId: peId,
         });
@@ -243,15 +296,15 @@ export default function PlantafelPage() {
 
   // Mehrere per Ziehen erfasste Zellen in einem Zug zuweisen. Konflikte einzelner Zellen werden
   // gesammelt und in einer einzigen Rueckfrage gebuendelt (statt einem Dialog je Zelle).
-  async function batchZuweisen(zellen: { benutzerId: number; datum: string }[], schichtartId: number) {
+  async function batchZuweisen(zellen: { peId: number; benutzerId: number; datum: string }[], schichtartId: number) {
     setBusy(true);
     setError(null);
-    const konflikte: { benutzerId: number; datum: string; text: string }[] = [];
+    const konflikte: { peId: number; benutzerId: number; datum: string; text: string }[] = [];
     for (const z of zellen) {
       try {
         await api("/zuweisungen", {
           method: "POST",
-          body: JSON.stringify({ benutzerId: z.benutzerId, schichtartId, datum: z.datum, planungseinheitId: peId }),
+          body: JSON.stringify({ benutzerId: z.benutzerId, schichtartId, datum: z.datum, planungseinheitId: z.peId }),
         });
       } catch (err) {
         const text = konfliktText(err);
@@ -266,13 +319,13 @@ export default function PlantafelPage() {
     }
     if (konflikte.length > 0) {
       const liste = konflikte
-        .map((k) => `${mitarbeiter.find((m) => m.id === k.benutzerId)?.name ?? ""} ${formatDatum(k.datum)}: ${k.text}`)
+        .map((k) => `${datenNachPe.get(k.peId)?.mitarbeiter.find((m) => m.id === k.benutzerId)?.name ?? ""} ${formatDatum(k.datum)}: ${k.text}`)
         .join("\n");
       if (confirm(`Konflikte bei ${konflikte.length} Zelle(n):\n${liste}\n\nTrotzdem zuweisen?`)) {
         for (const k of konflikte) {
           await api("/zuweisungen", {
             method: "POST",
-            body: JSON.stringify({ benutzerId: k.benutzerId, schichtartId, datum: k.datum, planungseinheitId: peId, force: true }),
+            body: JSON.stringify({ benutzerId: k.benutzerId, schichtartId, datum: k.datum, planungseinheitId: k.peId, force: true }),
           });
         }
       }
@@ -281,39 +334,63 @@ export default function PlantafelPage() {
     load();
   }
 
-  async function batchLoeschen(zellen: { benutzerId: number; datum: string }[]) {
+  // Bereitschaften stapeln sich auf Zellen, ohne eine bestehende Konfliktpruefung auszuloesen --
+  // daher ein einfacher Batch-POST ohne Konflikt-Rueckfrage (anders als batchZuweisen).
+  async function batchBereitschaftenZuweisen(zellen: { peId: number; benutzerId: number; datum: string }[], bereitschaftsartId: number) {
     setBusy(true);
-    const ids = zellen.flatMap((z) => zellenZuweisungen(z.benutzerId, z.datum).map((zw) => zw.id));
-    for (const id of ids) {
-      // kommentareBehalten=1: der Radierer loescht nur die Schicht, vorhandene Kommentare bleiben
-      // als Freischicht-Kommentar der aktuell angezeigten Planungseinheit erhalten (der Tag wird
-      // ja zur Freischicht).
-      await api(`/zuweisungen/${id}?kommentareBehalten=1&planungseinheitId=${peId}`, { method: "DELETE" });
+    setError(null);
+    for (const z of zellen) {
+      try {
+        await api("/bereitschaften", {
+          method: "POST",
+          body: JSON.stringify({ benutzerId: z.benutzerId, bereitschaftsartId, datum: z.datum, planungseinheitId: z.peId }),
+        });
+      } catch (err) {
+        setError((err as Error).message);
+      }
     }
     setBusy(false);
     load();
   }
 
-  function zieheZelleHinzu(benutzerId: number, datum: string) {
-    dragZellenRef.current.set(`${benutzerId}|${datum}`, { benutzerId, datum });
+  // Der Radierer leert eine Zelle vollstaendig -- sowohl zugewiesene Schichten als auch
+  // Bereitschaften, die an derselben Zelle "kleben".
+  async function batchLoeschen(zellen: { peId: number; benutzerId: number; datum: string }[]) {
+    setBusy(true);
+    const zuweisungIds = zellen.flatMap((z) => zellenZuweisungen(z.peId, z.benutzerId, z.datum).map((zw) => ({ id: zw.id, peId: z.peId })));
+    for (const { id, peId } of zuweisungIds) {
+      // kommentareBehalten=1: der Radierer loescht nur die Schicht, vorhandene Kommentare bleiben
+      // als Freischicht-Kommentar der jeweiligen Team-Sektion erhalten (der Tag wird ja zur Freischicht).
+      await api(`/zuweisungen/${id}?kommentareBehalten=1&planungseinheitId=${peId}`, { method: "DELETE" });
+    }
+    const bereitschaftIds = zellen.flatMap((z) => zellenBereitschaften(z.peId, z.benutzerId, z.datum).map((b) => b.id));
+    for (const id of bereitschaftIds) {
+      await api(`/bereitschaften/${id}`, { method: "DELETE" });
+    }
+    setBusy(false);
+    load();
+  }
+
+  function zieheZelleHinzu(peId: number, benutzerId: number, datum: string) {
+    dragZellenRef.current.set(`${peId}|${benutzerId}|${datum}`, { peId, benutzerId, datum });
     setDragTick((t) => t + 1);
   }
 
-  function zelleMouseDown(benutzerId: number, datum: string) {
+  function zelleMouseDown(peId: number, benutzerId: number, datum: string) {
     if (!werkzeug || busy) return;
     if (werkzeug.art === "vorlage") {
       // Eine Vorlage spannt bereits mehrere Tage auf -- kein Ziehen noetig, sofortige Zuweisung.
-      zelleKlick(benutzerId, datum);
+      zelleKlick(peId, benutzerId, datum);
       return;
     }
     dragZellenRef.current = new Map();
     setDragAktiv(true);
-    zieheZelleHinzu(benutzerId, datum);
+    zieheZelleHinzu(peId, benutzerId, datum);
   }
 
-  function zelleMouseEnter(benutzerId: number, datum: string) {
+  function zelleMouseEnter(peId: number, benutzerId: number, datum: string) {
     if (!dragAktiv) return;
-    zieheZelleHinzu(benutzerId, datum);
+    zieheZelleHinzu(peId, benutzerId, datum);
   }
 
   useEffect(() => {
@@ -325,6 +402,7 @@ export default function PlantafelPage() {
       setDragTick((t) => t + 1);
       if (zellen.length === 0 || !werkzeug) return;
       if (werkzeug.art === "schichtart") batchZuweisen(zellen, werkzeug.schichtart.id);
+      else if (werkzeug.art === "bereitschaft") batchBereitschaftenZuweisen(zellen, werkzeug.bereitschaftsart.id);
       else if (werkzeug.art === "radierer") batchLoeschen(zellen);
     }
     window.addEventListener("mouseup", beenden);
@@ -332,18 +410,18 @@ export default function PlantafelPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dragAktiv]);
 
-  async function badgeKlick(z: Zuweisung) {
+  function badgeKlick(z: Zuweisung) {
     if (busy || werkzeug) return; // mit aktivem Werkzeug uebernimmt Ziehen/Klick auf die Zelle
     setDetailId(z.id);
   }
 
-  function freiKlick(benutzerId: number, datum: string) {
+  function freiKlick(peId: number, benutzerId: number, datum: string) {
     if (busy || werkzeug) return; // mit aktivem Werkzeug uebernimmt Ziehen/Klick auf die Zelle
-    setFreischichtDetail({ benutzerId, datum });
+    setFreischichtDetail({ peId, benutzerId, datum });
   }
 
-  async function zuweisungLoeschen(z: Zuweisung) {
-    const anzahl = kommentareFuer(z.id).length;
+  async function zuweisungLoeschen(z: Zuweisung, peId: number) {
+    const anzahl = kommentareFuer(peId, z.id).length;
     const frage = anzahl > 0 ? `Zuweisung inklusive ${anzahl} Kommentar(en) löschen?` : "Zuweisung löschen?";
     if (!confirm(frage)) return;
     await api(`/zuweisungen/${z.id}`, { method: "DELETE" });
@@ -351,11 +429,10 @@ export default function PlantafelPage() {
     load();
   }
 
-  async function veroeffentlichen() {
-    if (!peId) return;
+  async function veroeffentlichen(peId: number) {
     const res = await api<{ anzahlMitarbeiter: number }>(`/planungseinheiten/${peId}/veroeffentlichen`, {
       method: "POST",
-      body: JSON.stringify({ von: tage[0], bis: tage[6] }),
+      body: JSON.stringify({ von: tage[0], bis: tage[tage.length - 1] }),
     });
     alert(`Plan veröffentlicht, ${res.anzahlMitarbeiter} Mitarbeiter benachrichtigt.`);
     load();
@@ -363,28 +440,31 @@ export default function PlantafelPage() {
 
   if (einheiten.length === 0) return <p className="empty">Keine Planer-Berechtigung.</p>;
 
-  const detailZuweisung = detailId != null ? zuweisungen.find((z) => z.id === detailId) : undefined;
+  // Fuer das Detailfenster reicht die Suche ueber alle geladenen Teams -- dieselbe Zuweisung kann
+  // (bei einem Mitarbeiter in mehreren eigenen Teams) identisch in mehreren Sektionen auftauchen.
+  let detailZuweisung: Zuweisung | undefined;
+  let detailPeId: number | undefined;
+  if (detailId != null) {
+    for (const pe of einheiten) {
+      const treffer = datenNachPe.get(pe.id)?.zuweisungen.find((z) => z.id === detailId);
+      if (treffer) {
+        detailZuweisung = treffer;
+        detailPeId = pe.id;
+        break;
+      }
+    }
+  }
+
+  const monatLabel = new Date(jahr, monat - 1, 1).toLocaleDateString("de-DE", { month: "long", year: "numeric" });
 
   return (
     <div className="page">
       <h1>Plantafel</h1>
 
       <div className="toolbar">
-        {einheiten.length > 1 && (
-          <select value={peId ?? ""} onChange={(e) => setPeId(Number(e.target.value))}>
-            {einheiten.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        )}
-        <button onClick={() => setWoche((w) => new Date(w.getTime() - 7 * 86400000))}>← Vorwoche</button>
-        <span>
-          {formatDatum(tage[0])} – {formatDatum(tage[6])}
-        </span>
-        <button onClick={() => setWoche((w) => new Date(w.getTime() + 7 * 86400000))}>Nächste Woche →</button>
-        <button onClick={veroeffentlichen}>Plan veröffentlichen</button>
+        <button onClick={() => monatWechseln(-1)}>← Vormonat</button>
+        <span style={{ minWidth: "10rem", textAlign: "center" }}>{monatLabel}</span>
+        <button onClick={() => monatWechseln(1)}>Nächster Monat →</button>
       </div>
 
       {error && <div className="error">{error}</div>}
@@ -423,25 +503,26 @@ export default function PlantafelPage() {
               </>
             );
           })()}
-          {schichtarten.every((sa) => sa.archiviert) && <span className="empty">Keine aktiven Schichtarten.</span>}
+          {schichtarten.length > 0 && schichtarten.every((sa) => sa.archiviert) && <span className="empty">Keine aktiven Schichtarten.</span>}
         </div>
 
         <div className="palette-gruppe">
-          <span className="palette-label">Schichtblöcke</span>
-          {vorlagen
-            .filter((v) => !v.enthaeltArchivierte)
-            .map((v) => (
+          <span className="palette-label">Bereitschaften</span>
+          {[...bereitschaftsarten.filter((ba) => !ba.archiviert)]
+            .sort((a, b) => a.bezeichnung.localeCompare(b.bezeichnung, "de"))
+            .map((ba) => (
               <button
-                key={v.id}
+                key={ba.id}
                 type="button"
-                className={`palette-item palette-vorlage${werkzeug?.art === "vorlage" && werkzeug.vorlage.id === v.id ? " aktiv" : ""}`}
-                title={v.eintraege.map((e) => `Tag ${e.tag_offset + 1}: ${e.kuerzel}`).join(", ")}
-                onClick={() => setWerkzeug({ art: "vorlage", vorlage: v })}
+                className={`palette-item${werkzeug?.art === "bereitschaft" && werkzeug.bereitschaftsart.id === ba.id ? " aktiv" : ""}`}
+                style={{ background: ba.farbe, color: "white" }}
+                title={ba.bezeichnung}
+                onClick={() => setWerkzeug({ art: "bereitschaft", bereitschaftsart: ba })}
               >
-                {v.bezeichnung}
+                {ba.kuerzel}
               </button>
             ))}
-          {vorlagen.length === 0 && <span className="empty">Keine Schichtblock-Vorlagen angelegt.</span>}
+          {bereitschaftsarten.length === 0 && <span className="empty">Keine Bereitschaftsarten angelegt.</span>}
         </div>
 
         <div className="palette-gruppe palette-werkzeuge">
@@ -461,127 +542,193 @@ export default function PlantafelPage() {
         <span className="hint">
           {werkzeug?.art === "schichtart" &&
             `„${werkzeug.schichtart.bezeichnung}" ausgewählt – Zellen anklicken oder durch Ziehen mehrere Tage auf einmal zuweisen.`}
+          {werkzeug?.art === "bereitschaft" &&
+            `„${werkzeug.bereitschaftsart.bezeichnung}" ausgewählt – Zellen anklicken oder durch Ziehen mehrere Tage auf einmal zuweisen (zusätzlich zu einer eventuell vorhandenen Schicht).`}
           {werkzeug?.art === "vorlage" &&
             `„${werkzeug.vorlage.bezeichnung}" ausgewählt – Zelle anklicken, sie ist der erste Tag des Blocks.`}
           {werkzeug?.art === "radierer" &&
-            "Radierer aktiv – Kürzel anklicken oder über mehrere Zellen ziehen, um Zuweisungen zu entfernen."}
+            "Radierer aktiv – Kürzel anklicken oder über mehrere Zellen ziehen, um Zuweisungen und Bereitschaften der Zelle zu entfernen."}
           {!werkzeug &&
             "Werkzeug wählen, um Schichten zuzuweisen. Ohne Werkzeug öffnet ein Klick auf ein Kürzel oder eine Freischicht die Details."}
         </span>
       </div>
 
-      <div className="plantafel-scroll">
-        <table
-          className={`table plantafel${werkzeug ? " stempel-aktiv" : ""}${dragAktiv ? " ziehen-aktiv" : ""}`}
-          onDragStart={(e) => e.preventDefault()}
-        >
-          <thead>
-            <tr>
-              <th>Mitarbeiter</th>
-              {tage.map((t, i) => {
-                const klassen = [istWochenende(t) ? "wochenende" : "", feiertage.has(t) ? "feiertag" : ""]
-                  .filter(Boolean)
-                  .join(" ");
-                return (
-                  <th key={t} className={klassen}>
-                    <div className="tag-nr">{formatDatum(t).slice(0, 5)}</div>
-                    <div className="tag-wt">{WOCHENTAGE_KURZ[i]}</div>
-                  </th>
-                );
-              })}
-            </tr>
-          </thead>
-          <tbody>
-            {mitarbeiter.map((m) => (
-              <tr key={m.id}>
-                <td>{m.name}</td>
-                {tage.map((t) => {
-                  const treffer = zellenZuweisungen(m.id, t);
-                  const klassen = [
-                    "plan-zelle",
-                    istWochenende(t) ? "wochenende" : "",
-                    feiertage.has(t) ? "feiertag" : "",
-                  ]
-                    .filter(Boolean)
-                    .join(" ");
-                  const wirdGezogen = dragZellenRef.current.has(`${m.id}|${t}`);
-                  return (
-                    <td
-                      key={t}
-                      className={`${klassen}${wirdGezogen ? " ziehen-markiert" : ""}`}
-                      onMouseDown={() => zelleMouseDown(m.id, t)}
-                      onMouseEnter={() => zelleMouseEnter(m.id, t)}
+      {einheiten.map((pe) => {
+        const daten = datenNachPe.get(pe.id);
+        const vorlagen = vorlagenNachPe.get(pe.id) ?? [];
+        return (
+          <section key={pe.id} className="plantafel-team-sektion">
+            <div className="toolbar">
+              <h2>{pe.name}</h2>
+              <button onClick={() => veroeffentlichen(pe.id)}>Plan veröffentlichen</button>
+            </div>
+
+            <div className="card palette">
+              <div className="palette-gruppe">
+                <span className="palette-label">Schichtblöcke</span>
+                {vorlagen
+                  .filter((v) => !v.enthaeltArchivierte)
+                  .map((v) => (
+                    <button
+                      key={v.id}
+                      type="button"
+                      className={`palette-item palette-vorlage${
+                        werkzeug?.art === "vorlage" && werkzeug.peId === pe.id && werkzeug.vorlage.id === v.id ? " aktiv" : ""
+                      }`}
+                      title={v.eintraege.map((e) => `Tag ${e.tag_offset + 1}: ${e.kuerzel}`).join(", ")}
+                      onClick={() => setWerkzeug({ art: "vorlage", peId: pe.id, vorlage: v })}
                     >
-                      {treffer.length > 0 ? (
-                        treffer.map((z) => {
-                          const sa = schichtarten.find((s) => s.id === z.schichtart_id);
-                          if (!sa) return null;
-                          const anzahlKommentare = kommentareFuer(z.id).length;
+                      {v.bezeichnung}
+                    </button>
+                  ))}
+                {vorlagen.length === 0 && <span className="empty">Keine Schichtblock-Vorlagen angelegt.</span>}
+              </div>
+            </div>
+
+            {!daten ? (
+              <div className="center-info">Lade…</div>
+            ) : (
+              <div className="plantafel-scroll">
+                <table
+                  className={`table plantafel${werkzeug ? " stempel-aktiv" : ""}${dragAktiv ? " ziehen-aktiv" : ""}`}
+                  onDragStart={(e) => e.preventDefault()}
+                >
+                  <thead>
+                    <tr>
+                      <th>Mitarbeiter</th>
+                      {tage.map((t) => {
+                        const klassen = [istWochenende(t) ? "wochenende" : "", feiertage.has(t) ? "feiertag" : ""]
+                          .filter(Boolean)
+                          .join(" ");
+                        return (
+                          <th key={t} className={klassen}>
+                            <div className="tag-nr">{Number(t.slice(8, 10))}</div>
+                            <div className="tag-wt">{wochentagKurz(t)}</div>
+                          </th>
+                        );
+                      })}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {daten.mitarbeiter.map((m) => (
+                      <tr key={m.id}>
+                        <td>{m.name}</td>
+                        {tage.map((t) => {
+                          const treffer = zellenZuweisungen(pe.id, m.id, t);
+                          const klassen = ["plan-zelle", istWochenende(t) ? "wochenende" : "", feiertage.has(t) ? "feiertag" : ""]
+                            .filter(Boolean)
+                            .join(" ");
+                          const wirdGezogen = dragZellenRef.current.has(`${pe.id}|${m.id}|${t}`);
                           return (
-                            <span
-                              key={z.id}
-                              className={`badge${z.status === "entwurf" ? " badge-entwurf" : ""}`}
-                              style={{ background: sa.farbe }}
-                              title={`${sa.bezeichnung} (${z.status})${anzahlKommentare > 0 ? ` · ${anzahlKommentare} Kommentar(e)` : ""}`}
-                              onMouseDown={(e) => {
-                                e.stopPropagation();
-                                zelleMouseDown(z.benutzer_id, z.datum);
-                              }}
-                              onMouseEnter={(e) => {
-                                e.stopPropagation();
-                                zelleMouseEnter(z.benutzer_id, z.datum);
-                              }}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                badgeKlick(z);
-                              }}
+                            <td
+                              key={t}
+                              className={`${klassen}${wirdGezogen ? " ziehen-markiert" : ""}`}
+                              onMouseDown={() => zelleMouseDown(pe.id, m.id, t)}
+                              onMouseEnter={() => zelleMouseEnter(pe.id, m.id, t)}
                             >
-                              {sa.kuerzel}
-                              {anzahlKommentare > 0 && <span className="kommentar-marker" />}
-                            </span>
+                              {treffer.length > 0 ? (
+                                treffer.map((z) => {
+                                  const sa = schichtarten.find((s) => s.id === z.schichtart_id);
+                                  if (!sa) return null;
+                                  const anzahlKommentare = kommentareFuer(pe.id, z.id).length;
+                                  return (
+                                    <span
+                                      key={z.id}
+                                      className={`badge${z.status === "entwurf" ? " badge-entwurf" : ""}`}
+                                      style={{ background: sa.farbe }}
+                                      title={`${sa.bezeichnung} (${z.status})${anzahlKommentare > 0 ? ` · ${anzahlKommentare} Kommentar(e)` : ""}`}
+                                      onMouseDown={(e) => {
+                                        e.stopPropagation();
+                                        zelleMouseDown(pe.id, z.benutzer_id, z.datum);
+                                      }}
+                                      onMouseEnter={(e) => {
+                                        e.stopPropagation();
+                                        zelleMouseEnter(pe.id, z.benutzer_id, z.datum);
+                                      }}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        badgeKlick(z);
+                                      }}
+                                    >
+                                      {sa.kuerzel}
+                                      {anzahlKommentare > 0 && <span className="kommentar-marker" />}
+                                    </span>
+                                  );
+                                })
+                              ) : (
+                                (() => {
+                                  const freiKommentare = freischichtKommentareFuer(pe.id, m.id, t);
+                                  return (
+                                    <span
+                                      className="freischicht-hinweis"
+                                      title={freiKommentare.length > 0 ? `${freiKommentare.length} Kommentar(e)` : undefined}
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        freiKlick(pe.id, m.id, t);
+                                      }}
+                                    >
+                                      frei
+                                      {freiKommentare.length > 0 && <span className="kommentar-marker" />}
+                                    </span>
+                                  );
+                                })()
+                              )}
+                              {zellenBereitschaften(pe.id, m.id, t).map((b) => {
+                                const ba = bereitschaftsarten.find((x) => x.id === b.bereitschaftsart_id);
+                                if (!ba) return null;
+                                return (
+                                  <span
+                                    key={b.id}
+                                    className="bereitschaft-chip"
+                                    style={{ background: ba.farbe }}
+                                    title={ba.bezeichnung}
+                                    onMouseDown={(e) => {
+                                      e.stopPropagation();
+                                      zelleMouseDown(pe.id, b.benutzer_id, b.datum);
+                                    }}
+                                    onMouseEnter={(e) => {
+                                      e.stopPropagation();
+                                      zelleMouseEnter(pe.id, b.benutzer_id, b.datum);
+                                    }}
+                                  >
+                                    {ba.kuerzel}
+                                  </span>
+                                );
+                              })}
+                            </td>
                           );
-                        })
-                      ) : (
-                        (() => {
-                          const freiKommentare = freischichtKommentareFuer(m.id, t);
-                          return (
-                            <span
-                              className="freischicht-hinweis"
-                              title={freiKommentare.length > 0 ? `${freiKommentare.length} Kommentar(e)` : undefined}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                freiKlick(m.id, t);
-                              }}
-                            >
-                              frei
-                              {freiKommentare.length > 0 && <span className="kommentar-marker" />}
-                            </span>
-                          );
-                        })()
-                      )}
-                    </td>
-                  );
-                })}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+                        })}
+                      </tr>
+                    ))}
+                    {daten.mitarbeiter.length === 0 && (
+                      <tr>
+                        <td colSpan={tage.length + 1} className="empty">
+                          Keine Mitarbeiter in diesem Team.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        );
+      })}
 
       <p className="hint">
         Legende: gestrichelter Rahmen = Entwurf, ohne Rahmen = veröffentlicht. Punkt am Kürzel = Kommentar vorhanden.
         Wochenenden grau, Feiertage gelb hinterlegt.
       </p>
 
-      {detailZuweisung && (
+      {detailZuweisung && detailPeId != null && (
         <ZuweisungDetail
           zuweisung={detailZuweisung}
-          schichtart={schichtarten.find((s) => s.id === detailZuweisung.schichtart_id)}
-          mitarbeiterName={mitarbeiter.find((m) => m.id === detailZuweisung.benutzer_id)?.name ?? ""}
-          kommentare={kommentareFuer(detailZuweisung.id)}
+          schichtart={schichtarten.find((s) => s.id === detailZuweisung!.schichtart_id)}
+          mitarbeiterName={datenNachPe.get(detailPeId)?.mitarbeiter.find((m) => m.id === detailZuweisung!.benutzer_id)?.name ?? ""}
+          kommentare={kommentareFuer(detailPeId, detailZuweisung.id)}
           onSchliessen={() => setDetailId(null)}
           onGeaendert={load}
-          onLoeschen={() => zuweisungLoeschen(detailZuweisung)}
+          onLoeschen={() => zuweisungLoeschen(detailZuweisung!, detailPeId!)}
         />
       )}
 
@@ -589,9 +736,9 @@ export default function PlantafelPage() {
         <FreischichtDetail
           benutzerId={freischichtDetail.benutzerId}
           datum={freischichtDetail.datum}
-          planungseinheitId={peId!}
-          mitarbeiterName={mitarbeiter.find((m) => m.id === freischichtDetail.benutzerId)?.name ?? ""}
-          kommentare={freischichtKommentareFuer(freischichtDetail.benutzerId, freischichtDetail.datum)}
+          planungseinheitId={freischichtDetail.peId}
+          mitarbeiterName={datenNachPe.get(freischichtDetail.peId)?.mitarbeiter.find((m) => m.id === freischichtDetail.benutzerId)?.name ?? ""}
+          kommentare={freischichtKommentareFuer(freischichtDetail.peId, freischichtDetail.benutzerId, freischichtDetail.datum)}
           onSchliessen={() => setFreischichtDetail(null)}
           onGeaendert={load}
         />

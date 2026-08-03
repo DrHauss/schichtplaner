@@ -11,6 +11,9 @@ export interface Regel {
   wochentage?: number[]; // 0=Montag .. 6=Sonntag
   woche?: number; // 1..4 = n-ter Wochentag im Monat, -1 = letzter
   daten?: string[];
+  // Faellt ein berechneter Termin auf einen als arbeitsfrei markierten Feiertag, wird er nicht
+  // angeboten (z. B. klassische Tagschicht an einem Feiertag) -- siehe berechneTermine.
+  beachteFeiertage?: boolean;
 }
 
 export interface Ausnahme {
@@ -94,6 +97,18 @@ export function berechneTermine(regel: Regel, ausnahmen: Ausnahme[] = []): strin
   }
 
   termine = termine.filter((d) => !istAusnahme(d, ausnahmen));
+
+  if (regel.beachteFeiertage) {
+    const feiertageProJahr = new Map<number, Set<string>>();
+    termine = termine.filter((d) => {
+      const jahr = Number(d.slice(0, 4));
+      if (!feiertageProJahr.has(jahr)) {
+        feiertageProJahr.set(jahr, new Set(ladeFeiertage(jahr).filter((f) => f.istFrei).map((f) => f.datum)));
+      }
+      return !feiertageProJahr.get(jahr)!.has(d);
+    });
+  }
+
   return Array.from(new Set(termine)).sort();
 }
 

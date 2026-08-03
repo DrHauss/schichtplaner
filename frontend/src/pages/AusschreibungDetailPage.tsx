@@ -1,7 +1,6 @@
 import { FormEvent, useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { api } from "../api/client";
-import { useAuth } from "../auth/AuthContext";
 import { formatDatum } from "../lib/datum";
 
 interface Schicht {
@@ -16,6 +15,13 @@ interface Bewerbung {
   id: number;
   status: string;
   prioritaet: number;
+}
+
+interface Ausschreibung {
+  id: number;
+  titel: string;
+  teams: { id: number; name: string }[];
+  istPlaner: boolean;
 }
 
 interface Block {
@@ -44,16 +50,15 @@ interface VergabeBewerber {
 
 export default function AusschreibungDetailPage() {
   const { id } = useParams();
-  const { mitgliedschaften, user } = useAuth();
+  const [ausschreibung, setAusschreibung] = useState<Ausschreibung | null>(null);
   const [bloecke, setBloecke] = useState<Block[]>([]);
   const [schichtarten, setSchichtarten] = useState<Schichtart[]>([]);
-  const [peId, setPeId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [vergabeOffen, setVergabeOffen] = useState<number | null>(null);
   const [vergabeDaten, setVergabeDaten] = useState<VergabeBewerber[]>([]);
   const [fairnessVorschlag, setFairnessVorschlag] = useState<number[]>([]);
 
-  const istPlanerHier = peId != null && (user?.istAdmin || mitgliedschaften.some((m) => m.rolle === "planer" && m.planungseinheit_id === peId));
+  const istPlanerHier = !!ausschreibung?.istPlaner;
 
   function load() {
     api<Block[]>(`/ausschreibungen/${id}/schichtbloecke`).then(setBloecke);
@@ -61,8 +66,7 @@ export default function AusschreibungDetailPage() {
 
   useEffect(() => {
     load();
-    // Planungseinheit ermitteln über Mitgliedschaften (vereinfachte Annahme: erste Planer-Einheit)
-    if (mitgliedschaften.length > 0) setPeId(mitgliedschaften[0].planungseinheit_id);
+    api<Ausschreibung>(`/ausschreibungen/${id}`).then(setAusschreibung);
   }, [id]);
 
   useEffect(() => {
@@ -119,7 +123,7 @@ export default function AusschreibungDetailPage() {
       {istPlanerHier && (
         <div className="actions">
           <button onClick={veroeffentlichen}>Ausschreibung veröffentlichen</button>
-          {peId && <NeuerBlock ausschreibungId={Number(id)} schichtarten={schichtarten} onCreated={load} />}
+          <NeuerBlock ausschreibungId={Number(id)} schichtarten={schichtarten} onCreated={load} />
         </div>
       )}
       {error && <div className="error">{error}</div>}
