@@ -173,6 +173,17 @@ export default function PlantafelPage() {
   const [werkzeug, setWerkzeug] = useState<Werkzeug | null>(null);
   const [detailId, setDetailId] = useState<number | null>(null);
   const [freischichtDetail, setFreischichtDetail] = useState<{ peId: number; benutzerId: number; datum: string } | null>(null);
+  // Radierer auf einer einzelnen Zelle mit mehreren Eintraegen (Schichten und/oder Bereitschaften):
+  // statt sofort alles zu loeschen, erst nachfragen, ob ein einzelner Eintrag oder alle entfernt
+  // werden sollen. Bei genau einem Eintrag oder beim Ziehen ueber mehrere Zellen entfaellt die
+  // Nachfrage (dort ist "alles in der Zelle/den Zellen loeschen" eindeutig gemeint).
+  const [radiererAuswahl, setRadiererAuswahl] = useState<{
+    peId: number;
+    benutzerId: number;
+    datum: string;
+    zuweisungen: Zuweisung[];
+    bereitschaften: Bereitschaft[];
+  } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -371,6 +382,44 @@ export default function PlantafelPage() {
     load();
   }
 
+  // Radierer auf genau einer Zelle: bei mehr als einem Eintrag (Schichten + Bereitschaften)
+  // erst per Dialog fragen, ob nur ein einzelner oder alle entfernt werden sollen. Beim Ziehen
+  // ueber mehrere Zellen bleibt es beim direkten Loeschen aller Eintraege je Zelle.
+  function radiererAusloesen(zellen: { peId: number; benutzerId: number; datum: string }[]) {
+    if (zellen.length !== 1) {
+      batchLoeschen(zellen);
+      return;
+    }
+    const [zelle] = zellen;
+    const zuweisungen = zellenZuweisungen(zelle.peId, zelle.benutzerId, zelle.datum);
+    const bereitschaften = zellenBereitschaften(zelle.peId, zelle.benutzerId, zelle.datum);
+    if (zuweisungen.length + bereitschaften.length > 1) {
+      setRadiererAuswahl({ ...zelle, zuweisungen, bereitschaften });
+    } else {
+      batchLoeschen(zellen);
+    }
+  }
+
+  async function radiererEinzelnLoeschen(art: "zuweisung" | "bereitschaft", id: number) {
+    if (!radiererAuswahl) return;
+    setBusy(true);
+    if (art === "zuweisung") {
+      await api(`/zuweisungen/${id}?kommentareBehalten=1&planungseinheitId=${radiererAuswahl.peId}`, { method: "DELETE" });
+    } else {
+      await api(`/bereitschaften/${id}`, { method: "DELETE" });
+    }
+    setBusy(false);
+    setRadiererAuswahl(null);
+    load();
+  }
+
+  function radiererAlleLoeschen() {
+    if (!radiererAuswahl) return;
+    const { peId, benutzerId, datum } = radiererAuswahl;
+    setRadiererAuswahl(null);
+    batchLoeschen([{ peId, benutzerId, datum }]);
+  }
+
   function zieheZelleHinzu(peId: number, benutzerId: number, datum: string) {
     dragZellenRef.current.set(`${peId}|${benutzerId}|${datum}`, { peId, benutzerId, datum });
     setDragTick((t) => t + 1);
@@ -403,7 +452,7 @@ export default function PlantafelPage() {
       if (zellen.length === 0 || !werkzeug) return;
       if (werkzeug.art === "schichtart") batchZuweisen(zellen, werkzeug.schichtart.id);
       else if (werkzeug.art === "bereitschaft") batchBereitschaftenZuweisen(zellen, werkzeug.bereitschaftsart.id);
-      else if (werkzeug.art === "radierer") batchLoeschen(zellen);
+      else if (werkzeug.art === "radierer") radiererAusloesen(zellen);
     }
     window.addEventListener("mouseup", beenden);
     return () => window.removeEventListener("mouseup", beenden);
@@ -743,6 +792,18 @@ export default function PlantafelPage() {
           onGeaendert={load}
         />
       )}
+
+      {radiererAuswahl && (
+        <RadiererAuswahlDialog
+          auswahl={radiererAuswahl}
+          mitarbeiterName={datenNachPe.get(radiererAuswahl.peId)?.mitarbeiter.find((m) => m.id === radiererAuswahl.benutzerId)?.name ?? ""}
+          schichtarten={schichtarten}
+          bereitschaftsarten={bereitschaftsarten}
+          onEinzeln={radiererEinzelnLoeschen}
+          onAlle={radiererAlleLoeschen}
+          onAbbrechen={() => setRadiererAuswahl(null)}
+        />
+      )}
     </div>
   );
 }
@@ -953,6 +1014,88 @@ function FreischichtDetail({
           </div>
         </form>
         {fehler && <div className="error">{fehler}</div>}
+      </div>
+    </>
+  );
+}
+
+// Radierer auf einer Zelle mit mehreren Eintraegen (Schichten und/oder Bereitschaften): fragt
+// nach, ob ein einzelner Eintrag oder alle auf einmal entfernt werden sollen, statt kommentarlos
+// alles zu loeschen.
+function RadiererAuswahlDialog({
+  auswahl,
+  mitarbeiterName,
+  schichtarten,
+  bereitschaftsarten,
+  onEinzeln,
+  onAlle,
+  onAbbrechen,
+}: {
+  auswahl: { datum: string; zuweisungen: Zuweisung[]; bereitschaften: Bereitschaft[] };
+  mitarbeiterName: string;
+  schichtarten: Schichtart[];
+  bereitschaftsarten: Bereitschaftsart[];
+  onEinzeln: (art: "zuweisung" | "bereitschaft", id: number) => void;
+  onAlle: () => void;
+  onAbbrechen: () => void;
+}) {
+  return (
+    <>
+      <div className="popover-backdrop" onClick={onAbbrechen} />
+      <div className="popover">
+        <div className="popover-kopf">
+          <div>
+            <strong>Mehrere Einträge an diesem Tag</strong>
+            <div className="hint">
+              {mitarbeiterName} · {formatDatum(auswahl.datum)}
+            </div>
+          </div>
+          <button type="button" className="popover-schliessen" onClick={onAbbrechen} title="Schließen">
+            ×
+          </button>
+        </div>
+
+        <p className="hint">Einzelnen Eintrag entfernen oder alle auf einmal löschen?</p>
+
+        <ul className="radierer-auswahl-liste">
+          {auswahl.zuweisungen.map((z) => {
+            const sa = schichtarten.find((s) => s.id === z.schichtart_id);
+            return (
+              <li key={`z${z.id}`}>
+                <span className="badge" style={{ background: sa?.farbe }}>
+                  {sa?.kuerzel}
+                </span>
+                <span>{sa?.bezeichnung}</span>
+                <button type="button" onClick={() => onEinzeln("zuweisung", z.id)}>
+                  Nur diesen löschen
+                </button>
+              </li>
+            );
+          })}
+          {auswahl.bereitschaften.map((b) => {
+            const ba = bereitschaftsarten.find((x) => x.id === b.bereitschaftsart_id);
+            return (
+              <li key={`b${b.id}`}>
+                <span className="bereitschaft-chip" style={{ background: ba?.farbe }}>
+                  {ba?.kuerzel}
+                </span>
+                <span>{ba?.bezeichnung}</span>
+                <button type="button" onClick={() => onEinzeln("bereitschaft", b.id)}>
+                  Nur diesen löschen
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+
+        <div className="popover-fuss">
+          <button type="button" onClick={onAlle}>
+            Alle löschen
+          </button>
+          <button type="button" onClick={onAbbrechen}>
+            Abbrechen
+          </button>
+        </div>
       </div>
     </>
   );
