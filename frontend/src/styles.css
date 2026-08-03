@@ -43,7 +43,7 @@ body {
 .table th, .table td { border: 1px solid #e2e8f0; padding: 0.5rem; text-align: left; }
 .table th { background: #f1f5f9; }
 
-.badge { display: inline-block; padding: 0.15rem 0.4rem; border-radius: 4px; color: white; font-size: 0.8rem; }
+.badge { display: inline-block; position: relative; padding: 0.15rem 0.4rem; border-radius: 4px; color: white; font-size: 0.8rem; }
 
 .status { padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.8rem; }
 .status-entwurf { background: #fef3c7; }
@@ -88,6 +88,75 @@ body {
 .rolle-chip button:hover { color: #dc2626; }
 
 .freischicht-hinweis { color: #cbd5e1; font-size: 0.8rem; font-style: italic; }
+
+/* Plantafel: Palette (Stempel-Werkzeuge), Tafel, Detailfenster mit Kommentaren */
+.palette { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
+.palette-label { font-weight: 600; margin-right: 0.3rem; }
+.palette-item {
+  padding: 0.3rem 0.6rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 4px;
+  background: #f8fafc;
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.palette-item.aktiv { outline: 2px solid #2563eb; outline-offset: 1px; }
+.palette-vorlage { background: #eef2ff; border-color: #c7d2fe; }
+.palette-radierer { background: #fee2e2; border-color: #fecaca; }
+.palette .hint { flex-basis: 100%; }
+
+.plantafel-scroll { overflow-x: auto; }
+.plantafel th, .plantafel td { text-align: center; }
+.plantafel th:first-child, .plantafel td:first-child { text-align: left; min-width: 9rem; }
+.plantafel .tag-nr { font-weight: 600; line-height: 1.1; }
+.plantafel .tag-wt { font-weight: 400; color: #64748b; font-size: 0.75rem; line-height: 1.1; }
+.plantafel th.wochenende, .plantafel td.wochenende { background: #f1f5f9; }
+.plantafel th.feiertag, .plantafel td.feiertag { background: #fef3c7; }
+.plantafel th.feiertag.wochenende, .plantafel td.feiertag.wochenende { background: #fde68a; }
+.plantafel.stempel-aktiv .plan-zelle { cursor: crosshair; }
+.plantafel.stempel-aktiv .plan-zelle:hover { outline: 2px solid #2563eb; outline-offset: -2px; }
+.plantafel .badge { margin: 0.05rem; }
+.badge-entwurf { outline: 2px dashed #f59e0b; outline-offset: 1px; }
+.kommentar-marker {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #1e293b;
+  border: 1px solid white;
+}
+
+.popover-backdrop { position: fixed; inset: 0; z-index: 10; }
+.popover {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(28rem, 92vw);
+  max-height: 80vh;
+  overflow-y: auto;
+  background: white;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 1rem;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  z-index: 11;
+}
+.popover-kopf { display: flex; justify-content: space-between; align-items: start; gap: 0.5rem; }
+.popover-schliessen { border: none; background: transparent; font-size: 1.3rem; cursor: pointer; color: #64748b; }
+.kommentar-liste { margin: 0.75rem 0; }
+.kommentar-eintrag { border-top: 1px solid #f1f5f9; padding: 0.4rem 0; font-size: 0.9rem; }
+.kommentar-meta { display: flex; align-items: center; gap: 0.4rem; color: #64748b; font-size: 0.78rem; }
+.kommentar-meta button { border: none; background: transparent; cursor: pointer; color: #94a3b8; font-weight: 700; }
+.kommentar-meta button:hover { color: #dc2626; }
+.sichtbarkeit-chip { padding: 0.05rem 0.35rem; border-radius: 4px; background: #dcfce7; color: #166534; }
+.sichtbarkeit-nur-planer { background: #fef3c7; color: #92400e; }
+.kommentar-form { display: flex; flex-direction: column; gap: 0.4rem; }
+.kommentar-form textarea { padding: 0.4rem; border: 1px solid #cbd5e1; border-radius: 4px; font-family: inherit; }
+.popover-fuss { margin-top: 0.75rem; border-top: 1px solid #f1f5f9; padding-top: 0.5rem; }
+.kommentar-hinweis { color: #475569; font-size: 0.8rem; }
 
 /* Team-Uebersicht: monatsweise, kompakt, mit hervorgehobenen Wochenenden/Feiertagen */
 .uebersicht-monat-scroll { overflow-x: auto; margin-bottom: 1rem; }
