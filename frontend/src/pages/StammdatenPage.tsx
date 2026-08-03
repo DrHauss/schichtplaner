@@ -16,6 +16,17 @@ interface Schichtart {
   archiviert: boolean;
 }
 
+// Schichtarten werden grundsaetzlich alphabetisch sortiert und in Dienst/Abwesenheit gruppiert
+// dargestellt -- localeCompare("de") statt SQLite-Sortierung, da SQLite COLLATE NOCASE nur
+// ASCII-Gross-/Kleinschreibung faltet, keine Umlaute.
+function nachDienstUndAbwesenheitGruppiert<T extends { kategorie: string; bezeichnung: string }>(liste: T[]) {
+  const sortiert = (arr: T[]) => [...arr].sort((a, b) => a.bezeichnung.localeCompare(b.bezeichnung, "de"));
+  return {
+    dienst: sortiert(liste.filter((s) => s.kategorie !== "abwesenheit")),
+    abwesenheit: sortiert(liste.filter((s) => s.kategorie === "abwesenheit")),
+  };
+}
+
 // Zeitwert-Vorschlag aus Beginn/Ende/Pause -- der reine Vorschlag, keine Zwangs-Berechnung,
 // da der tatsaechlich zustehende Pausenanspruch vom hier angenommenen pauseMin abweichen kann.
 function zeitwertVorschlag(beginn: string, ende: string, pauseMin: number): number {
@@ -320,7 +331,9 @@ function SchichtartenSektion({
           </tr>
         </thead>
         <tbody>
-          {schichtarten.map((s) =>
+          {(() => {
+            const { dienst, abwesenheit } = nachDienstUndAbwesenheitGruppiert(schichtarten);
+            const zeile = (s: Schichtart) =>
             editId === s.id && editForm ? (
               <tr key={s.id}>
                 <td>
@@ -428,8 +441,24 @@ function SchichtartenSektion({
                   </button>
                 </td>
               </tr>
-            )
-          )}
+            );
+            return (
+              <>
+                {dienst.length > 0 && (
+                  <tr className="tabellen-gruppe">
+                    <td colSpan={9}>Dienste</td>
+                  </tr>
+                )}
+                {dienst.map(zeile)}
+                {abwesenheit.length > 0 && (
+                  <tr className="tabellen-gruppe">
+                    <td colSpan={9}>Abwesenheiten</td>
+                  </tr>
+                )}
+                {abwesenheit.map(zeile)}
+              </>
+            );
+          })()}
           {schichtarten.length === 0 && (
             <tr>
               <td colSpan={9} className="empty">
@@ -902,13 +931,20 @@ function SchichtblockVorlagenSektion({ peId }: { peId: number }) {
                 setEintraege(copy);
               }}
             >
-              {schichtarten
-                .filter((s) => !s.archiviert)
-                .map((s) => (
+              {(() => {
+                const { dienst, abwesenheit } = nachDienstUndAbwesenheitGruppiert(schichtarten.filter((s) => !s.archiviert));
+                const option = (s: Schichtart) => (
                   <option key={s.id} value={s.id}>
                     {s.kuerzel} – {s.bezeichnung}
                   </option>
-                ))}
+                );
+                return (
+                  <>
+                    {dienst.length > 0 && <optgroup label="Dienste">{dienst.map(option)}</optgroup>}
+                    {abwesenheit.length > 0 && <optgroup label="Abwesenheiten">{abwesenheit.map(option)}</optgroup>}
+                  </>
+                );
+              })()}
             </select>
             {eintraege.length > 1 && (
               <button type="button" onClick={() => setEintraege(eintraege.filter((_, idx) => idx !== i))}>
