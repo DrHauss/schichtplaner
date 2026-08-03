@@ -226,6 +226,19 @@ CREATE TABLE IF NOT EXISTS schichtblock_vorlage_eintrag (
   tag_offset      INTEGER NOT NULL,
   schichtart_id   INTEGER NOT NULL REFERENCES schichtart(id) ON DELETE CASCADE
 );
+
+-- Feiertage je Jahr: beim ersten Zugriff auf ein Jahr automatisch aus der gesetzlichen
+-- NRW-Regel generiert (siehe lib/feiertage.ts), danach bearbeitbar (Datum/Bezeichnung/ist_frei)
+-- und um Sonderregelungen erweiterbar (zusaetzliche, manuell angelegte Eintraege).
+CREATE TABLE IF NOT EXISTS feiertag (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  jahr        INTEGER NOT NULL,
+  datum       TEXT NOT NULL,
+  bezeichnung TEXT NOT NULL,
+  ist_frei    INTEGER NOT NULL DEFAULT 1,
+  quelle      TEXT NOT NULL DEFAULT 'generiert',
+  UNIQUE(jahr, bezeichnung)
+);
 `);
 
 // SQLite erlaubt bei ALTER TABLE ... ADD COLUMN weder UNIQUE- noch PRIMARY-KEY-Constraints;

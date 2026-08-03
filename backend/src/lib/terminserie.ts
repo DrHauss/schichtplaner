@@ -1,6 +1,6 @@
 // Termingenerator fuer die Jahresabfrage (Konzept Kap. 3.1): erzeugt aus einer Serienregel
 // die Liste der Termine eines Jahres, statt sie einzeln anlegen zu muessen.
-import { feiertageNRW } from "./feiertage";
+import { ladeFeiertage } from "./feiertage";
 
 export type RegelTyp = "woechentlich" | "monatlich" | "feiertage" | "einzeln";
 
@@ -63,8 +63,8 @@ export function berechneTermine(regel: Regel, ausnahmen: Ausnahme[] = []): strin
     const jahrVon = Number(regel.von.slice(0, 4));
     const jahrBis = Number(regel.bis.slice(0, 4));
     for (let j = jahrVon; j <= jahrBis; j++) {
-      for (const f of feiertageNRW(j)) {
-        if (f.datum >= regel.von && f.datum <= regel.bis) termine.push(f.datum);
+      for (const f of ladeFeiertage(j)) {
+        if (f.istFrei && f.datum >= regel.von && f.datum <= regel.bis) termine.push(f.datum);
       }
     }
   } else if (regel.typ === "woechentlich") {

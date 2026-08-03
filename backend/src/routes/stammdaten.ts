@@ -1,17 +1,69 @@
 import { Router } from "express";
 import { db } from "../lib/db";
 import { requireAuth, requirePlaner, AuthedRequest } from "../middleware/auth";
-import { istPlanerFuerPlanungseinheit } from "../lib/berechtigung";
-import { berechneArbeitstage } from "../lib/feiertage";
+import { istPlanerFuerPlanungseinheit, istIrgendeinPlaner } from "../lib/berechtigung";
+import { berechneArbeitstage, ladeFeiertage } from "../lib/feiertage";
 
 export const stammdatenRouter = Router();
 stammdatenRouter.use(requireAuth);
 
-// Arbeitstage eines Jahres in NRW (Wochentage abzueglich gesetzlicher Feiertage) -- Grundlage
+// Arbeitstage eines Jahres in NRW (Wochentage abzueglich der arbeitsfreien Feiertage) -- Grundlage
 // fuer die Jahresarbeitszeit-Berechnung aus der taeglichen Sollarbeitszeit je Mitarbeiter.
 stammdatenRouter.get("/arbeitstage", (req, res) => {
   const jahr = Number(req.query.jahr) || new Date().getFullYear();
   res.json(berechneArbeitstage(jahr));
+});
+
+// Feiertage eines Jahres: werden beim ersten Zugriff automatisch aus der gesetzlichen NRW-Regel
+// generiert, sind danach bearbeitbar (Datum, Bezeichnung, arbeitsfrei ja/nein) und koennen um
+// Sonderregelungen (zusaetzliche, manuell angelegte Eintraege) ergaenzt werden.
+stammdatenRouter.get("/feiertage", (req, res) => {
+  const jahr = Number(req.query.jahr) || new Date().getFullYear();
+  res.json(ladeFeiertage(jahr));
+});
+
+stammdatenRouter.post("/feiertage", (req: AuthedRequest, res) => {
+  if (!istIrgendeinPlaner(req)) return res.status(403).json({ error: "Keine Planer-Berechtigung" });
+  const { jahr, datum, bezeichnung, istFrei } = req.body ?? {};
+  if (!jahr || !datum || !bezeichnung) return res.status(400).json({ error: "jahr, datum und bezeichnung erforderlich" });
+  try {
+    const info = db
+      .prepare("INSERT INTO feiertag (jahr, datum, bezeichnung, ist_frei, quelle) VALUES (?,?,?,?,'manuell')")
+      .run(jahr, datum, bezeichnung, istFrei === false ? 0 : 1);
+    res.status(201).json({ id: info.lastInsertRowid });
+  } catch {
+    res.status(409).json({ error: "Ein Feiertag mit dieser Bezeichnung existiert in diesem Jahr bereits" });
+  }
+});
+
+stammdatenRouter.put("/feiertage/:id", (req: AuthedRequest, res) => {
+  if (!istIrgendeinPlaner(req)) return res.status(403).json({ error: "Keine Planer-Berechtigung" });
+  const bestehend = db.prepare("SELECT id FROM feiertag WHERE id = ?").get(req.params.id);
+  if (!bestehend) return res.status(404).json({ error: "Feiertag nicht gefunden" });
+  const { datum, bezeichnung, istFrei } = req.body ?? {};
+  if (!datum || !bezeichnung) return res.status(400).json({ error: "datum und bezeichnung erforderlich" });
+  db.prepare("UPDATE feiertag SET datum = ?, bezeichnung = ?, ist_frei = ? WHERE id = ?").run(
+    datum,
+    bezeichnung,
+    istFrei === false ? 0 : 1,
+    req.params.id
+  );
+  res.json({ ok: true });
+});
+
+stammdatenRouter.delete("/feiertage/:id", (req: AuthedRequest, res) => {
+  if (!istIrgendeinPlaner(req)) return res.status(403).json({ error: "Keine Planer-Berechtigung" });
+  const row = db.prepare("SELECT quelle FROM feiertag WHERE id = ?").get(req.params.id) as { quelle: string } | undefined;
+  if (!row) return res.status(404).json({ error: "Feiertag nicht gefunden" });
+  if (row.quelle === "manuell") {
+    db.prepare("DELETE FROM feiertag WHERE id = ?").run(req.params.id);
+  } else {
+    // Automatisch generierte Feiertage werden nicht geloescht (sonst wuerden sie beim naechsten
+    // Zugriff auf das Jahr erneut generiert), sondern als nicht arbeitsfrei markiert -- so bleibt
+    // die Sonderregelung (z. B. "hier kein Feiertag") dauerhaft erhalten.
+    db.prepare("UPDATE feiertag SET ist_frei = 0 WHERE id = ?").run(req.params.id);
+  }
+  res.json({ ok: true });
 });
 
 // Planungseinheiten
