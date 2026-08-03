@@ -89,6 +89,26 @@ body {
 
 .freischicht-hinweis { color: #cbd5e1; font-size: 0.8rem; font-style: italic; }
 
+/* Team-Uebersicht: monatsweise, kompakt, mit hervorgehobenen Wochenenden/Feiertagen */
+.uebersicht-monat-scroll { overflow-x: auto; margin-bottom: 1rem; }
+.uebersicht-monat { white-space: nowrap; font-size: 0.78rem; }
+.uebersicht-monat th, .uebersicht-monat td { padding: 0.2rem 0.3rem; text-align: center; min-width: 2rem; }
+.uebersicht-monat th:first-child, .uebersicht-monat td:first-child {
+  text-align: left;
+  position: sticky;
+  left: 0;
+  background: white;
+  z-index: 1;
+  min-width: 8rem;
+}
+.uebersicht-monat .tag-nr { font-weight: 600; line-height: 1.1; }
+.uebersicht-monat .tag-wt { font-weight: 400; color: #64748b; font-size: 0.68rem; line-height: 1.1; }
+.uebersicht-monat th.wochenende, .uebersicht-monat td.wochenende { background: #f1f5f9; }
+.uebersicht-monat th.feiertag, .uebersicht-monat td.feiertag { background: #fef3c7; }
+.uebersicht-monat th.feiertag.wochenende, .uebersicht-monat td.feiertag.wochenende { background: #fde68a; }
+.uebersicht-monat .badge { font-size: 0.68rem; padding: 0.05rem 0.25rem; }
+.uebersicht-monat .freischicht-hinweis { font-size: 0.68rem; }
+
 /* Rasteransicht (Jahresabfrage) */
 .raster-scroll { overflow-x: auto; }
 .raster-matrix { white-space: nowrap; }
