@@ -22,27 +22,29 @@ db.prepare("UPDATE benutzer SET soll_stunden_taeglich = ? WHERE id = ? AND soll_
 db.prepare("UPDATE benutzer SET soll_stunden_taeglich = ? WHERE id = ? AND soll_stunden_taeglich IS NULL").run(8, mitarbeiter2);
 db.prepare("UPDATE benutzer SET soll_stunden_taeglich = ? WHERE id = ? AND soll_stunden_taeglich IS NULL").run(6, mitarbeiter3);
 
-let pe = db.prepare("SELECT id FROM planungseinheit WHERE name = ?").get("Pflegeteam Station 1") as
-  | { id: number }
-  | undefined;
-let peId: number;
-if (!pe) {
-  const info = db
-    .prepare("INSERT INTO planungseinheit (name, standort) VALUES (?,?)")
-    .run("Pflegeteam Station 1", "Hauptstandort");
-  peId = Number(info.lastInsertRowid);
-} else {
-  peId = pe.id;
+function upsertPlanungseinheit(name: string, standort: string) {
+  const existing = db.prepare("SELECT id FROM planungseinheit WHERE name = ?").get(name) as { id: number } | undefined;
+  if (existing) return existing.id;
+  const info = db.prepare("INSERT INTO planungseinheit (name, standort) VALUES (?,?)").run(name, standort);
+  return Number(info.lastInsertRowid);
 }
+
+const peId = upsertPlanungseinheit("Pflegeteam Station 1", "Hauptstandort");
+// Zweites Team, um Mitarbeiter in mehreren Teams demonstrieren zu koennen: Anna ist Mitglied
+// beider Teams, ihre Schicht (Schichtarten sind global) gilt damit fuer beide gleichermassen.
+const peId2 = upsertPlanungseinheit("Pflegeteam Station 2", "Hauptstandort");
 
 const insertMitgliedschaft = db.prepare(
   "INSERT OR IGNORE INTO mitgliedschaft (benutzer_id, planungseinheit_id, rolle) VALUES (?,?,?)"
 );
 insertMitgliedschaft.run(planerId, peId, "planer");
+insertMitgliedschaft.run(planerId, peId2, "planer");
 insertMitgliedschaft.run(mitarbeiter1, peId, "mitarbeiter");
+insertMitgliedschaft.run(mitarbeiter1, peId2, "mitarbeiter");
 insertMitgliedschaft.run(mitarbeiter2, peId, "mitarbeiter");
 insertMitgliedschaft.run(mitarbeiter3, peId, "mitarbeiter");
 
+// Schichtarten sind global -- sie gelten fuer alle Planungseinheiten gleichermassen (siehe lib/db.ts).
 function upsertSchichtart(
   kuerzel: string,
   bezeichnung: string,
@@ -54,15 +56,13 @@ function upsertSchichtart(
   pauseMin = 30,
   stundenwert: number | null = 7.5
 ) {
-  const existing = db
-    .prepare("SELECT id FROM schichtart WHERE planungseinheit_id = ? AND kuerzel = ?")
-    .get(peId, kuerzel) as { id: number } | undefined;
+  const existing = db.prepare("SELECT id FROM schichtart WHERE kuerzel = ?").get(kuerzel) as { id: number } | undefined;
   if (existing) return existing.id;
   const info = db
     .prepare(
-      "INSERT INTO schichtart (planungseinheit_id, kuerzel, bezeichnung, farbe, beginn, ende, pause_min, stundenwert, kategorie, ganztags) VALUES (?,?,?,?,?,?,?,?,?,?)"
+      "INSERT INTO schichtart (kuerzel, bezeichnung, farbe, beginn, ende, pause_min, stundenwert, kategorie, ganztags) VALUES (?,?,?,?,?,?,?,?,?)"
     )
-    .run(peId, kuerzel, bezeichnung, farbe, beginn, ende, pauseMin, stundenwert, kategorie, ganztags ? 1 : 0);
+    .run(kuerzel, bezeichnung, farbe, beginn, ende, pauseMin, stundenwert, kategorie, ganztags ? 1 : 0);
   return Number(info.lastInsertRowid);
 }
 
@@ -101,4 +101,4 @@ console.log("Login-Daten:");
 console.log("  Admin:      admin@schichtweb.de / admin123");
 console.log("  Planer:     planer@schichtweb.de / planer123");
 console.log("  Mitarbeiter: anna@schichtweb.de / ben@schichtweb.de / clara@schichtweb.de, jeweils test1234");
-console.log({ peId, fruehId, spaetId, nachtId, krankId, urlaubId });
+console.log({ peId, peId2, fruehId, spaetId, nachtId, krankId, urlaubId });

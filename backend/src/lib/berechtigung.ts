@@ -29,9 +29,24 @@ export function istPlanerFuerPlanungseinheit(req: AuthedRequest, planungseinheit
     .get(req.user!.sub, planungseinheitId);
 }
 
-// Fuer planungseinheiten-uebergreifende Stammdaten (z. B. Feiertage): Planer-Berechtigung in
-// irgendeiner Planungseinheit genuegt, da es keine sinnvolle Zuordnung zu genau einer Einheit gibt.
+// Fuer planungseinheiten-uebergreifende Stammdaten (z. B. Feiertage, Schichtarten): Planer-
+// Berechtigung in irgendeiner Planungseinheit genuegt, da es keine sinnvolle Zuordnung zu genau
+// einer Einheit gibt.
 export function istIrgendeinPlaner(req: AuthedRequest): boolean {
   if (req.user!.istAdmin) return true;
   return !!db.prepare("SELECT 1 FROM mitgliedschaft WHERE benutzer_id = ? AND rolle = 'planer'").get(req.user!.sub);
+}
+
+// Da Schichtarten global sind, "gehoert" eine Zuweisung keiner bestimmten Planungseinheit mehr.
+// Verwalten darf sie, wer Planer einer Einheit ist, in der auch der betroffene Mitarbeiter Mitglied
+// ist -- ein geteiltes Team genuegt, auch wenn die Schicht urspruenglich ueber ein anderes Team des
+// Mitarbeiters zugewiesen wurde.
+export function istPlanerFuerMitarbeiter(req: AuthedRequest, benutzerId: number): boolean {
+  if (req.user!.istAdmin) return true;
+  return !!db
+    .prepare(
+      `SELECT 1 FROM mitgliedschaft m1 JOIN mitgliedschaft m2 ON m1.planungseinheit_id = m2.planungseinheit_id
+       WHERE m1.benutzer_id = ? AND m1.rolle = 'planer' AND m2.benutzer_id = ?`
+    )
+    .get(req.user!.sub, benutzerId);
 }

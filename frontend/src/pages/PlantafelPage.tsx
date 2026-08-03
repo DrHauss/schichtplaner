@@ -286,8 +286,9 @@ export default function PlantafelPage() {
     const ids = zellen.flatMap((z) => zellenZuweisungen(z.benutzerId, z.datum).map((zw) => zw.id));
     for (const id of ids) {
       // kommentareBehalten=1: der Radierer loescht nur die Schicht, vorhandene Kommentare bleiben
-      // als Freischicht-Kommentar erhalten (der Tag wird ja zur Freischicht).
-      await api(`/zuweisungen/${id}?kommentareBehalten=1`, { method: "DELETE" });
+      // als Freischicht-Kommentar der aktuell angezeigten Planungseinheit erhalten (der Tag wird
+      // ja zur Freischicht).
+      await api(`/zuweisungen/${id}?kommentareBehalten=1&planungseinheitId=${peId}`, { method: "DELETE" });
     }
     setBusy(false);
     load();

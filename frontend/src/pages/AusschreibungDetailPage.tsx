@@ -66,8 +66,8 @@ export default function AusschreibungDetailPage() {
   }, [id]);
 
   useEffect(() => {
-    if (peId) api<Schichtart[]>(`/planungseinheiten/${peId}/schichtarten`).then(setSchichtarten);
-  }, [peId]);
+    api<Schichtart[]>("/schichtarten").then(setSchichtarten);
+  }, []);
 
   async function veroeffentlichen() {
     await api(`/ausschreibungen/${id}/veroeffentlichen`, { method: "POST" });

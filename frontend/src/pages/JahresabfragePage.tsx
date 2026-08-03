@@ -239,7 +239,7 @@ function GeneratorTab({ ausschreibungId, peId, onErzeugt }: { ausschreibungId: n
   }
 
   useEffect(() => {
-    api<Schichtart[]>(`/planungseinheiten/${peId}/schichtarten`).then((s) => {
+    api<Schichtart[]>("/schichtarten").then((s) => {
       setSchichtarten(s);
       if (s[0]) setSchichtartId(s[0].id);
     });
