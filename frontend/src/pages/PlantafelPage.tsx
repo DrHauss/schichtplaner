@@ -12,6 +12,7 @@ interface Schichtart {
   kuerzel: string;
   bezeichnung: string;
   farbe: string;
+  kategorie: "dienst" | "abwesenheit";
   archiviert: boolean | number;
 }
 interface Zuweisung {
@@ -61,6 +62,16 @@ type Werkzeug =
   | { art: "radierer" };
 
 const WOCHENTAGE_KURZ = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
+
+// Schichtarten werden grundsaetzlich alphabetisch sortiert und in Dienst/Abwesenheit gruppiert
+// dargestellt -- localeCompare("de") statt SQLite-Sortierung wegen deutscher Umlaute.
+function nachDienstUndAbwesenheitGruppiert<T extends { kategorie: string; bezeichnung: string }>(liste: T[]) {
+  const sortiert = (arr: T[]) => [...arr].sort((a, b) => a.bezeichnung.localeCompare(b.bezeichnung, "de"));
+  return {
+    dienst: sortiert(liste.filter((s) => s.kategorie !== "abwesenheit")),
+    abwesenheit: sortiert(liste.filter((s) => s.kategorie === "abwesenheit")),
+  };
+}
 
 function wochenTage(startMontag: Date) {
   return Array.from({ length: 7 }, (_, i) => {
@@ -370,9 +381,9 @@ export default function PlantafelPage() {
       <div className="card palette">
         <div className="palette-gruppe">
           <span className="palette-label">Einzelschichten</span>
-          {schichtarten
-            .filter((sa) => !sa.archiviert)
-            .map((sa) => (
+          {(() => {
+            const { dienst, abwesenheit } = nachDienstUndAbwesenheitGruppiert(schichtarten.filter((sa) => !sa.archiviert));
+            const knopf = (sa: Schichtart) => (
               <button
                 key={sa.id}
                 type="button"
@@ -383,7 +394,24 @@ export default function PlantafelPage() {
               >
                 {sa.kuerzel}
               </button>
-            ))}
+            );
+            return (
+              <>
+                {dienst.length > 0 && (
+                  <>
+                    <span className="palette-unterlabel">Dienste</span>
+                    {dienst.map(knopf)}
+                  </>
+                )}
+                {abwesenheit.length > 0 && (
+                  <>
+                    <span className="palette-unterlabel">Abwesenheiten</span>
+                    {abwesenheit.map(knopf)}
+                  </>
+                )}
+              </>
+            );
+          })()}
           {schichtarten.every((sa) => sa.archiviert) && <span className="empty">Keine aktiven Schichtarten.</span>}
         </div>
 

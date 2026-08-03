@@ -42,6 +42,7 @@ body {
 .table { width: 100%; border-collapse: collapse; background: white; }
 .table th, .table td { border: 1px solid #e2e8f0; padding: 0.5rem; text-align: left; }
 .table th { background: #f1f5f9; }
+.tabellen-gruppe td { background: #f1f5f9; font-weight: 600; padding: 0.4rem 0.6rem; }
 
 .badge { display: inline-block; position: relative; padding: 0.15rem 0.4rem; border-radius: 4px; color: white; font-size: 0.8rem; }
 
@@ -95,6 +96,7 @@ body {
 .palette { display: flex; flex-direction: column; gap: 0.5rem; }
 .palette-gruppe { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: center; }
 .palette-label { font-weight: 600; margin-right: 0.3rem; min-width: 7rem; }
+.palette-unterlabel { font-weight: 500; color: #64748b; font-size: 0.8rem; flex-basis: 100%; margin-top: 0.15rem; }
 .palette-item {
   padding: 0.3rem 0.6rem;
   border: 1px solid #cbd5e1;
