@@ -16,7 +16,27 @@ meinRouter.get("/plan", (req: AuthedRequest, res) => {
     params.push(von, bis);
   }
   sql += " ORDER BY sz.datum ASC";
-  res.json(db.prepare(sql).all(...params));
+  const eintraege = db.prepare(sql).all(...params) as { id: number }[];
+
+  // Nur oeffentliche Kommentare -- 'nur_planer' bleibt der Plantafel vorbehalten.
+  const kommentare = db
+    .prepare(
+      `SELECT k.zuweisung_id, b.name AS autor_name, k.text, k.erstellt_am
+       FROM schicht_kommentar k
+       JOIN schicht_zuweisung sz ON sz.id = k.zuweisung_id
+       JOIN benutzer b ON b.id = k.autor_id
+       WHERE k.sichtbarkeit = 'oeffentlich' AND sz.benutzer_id = ? AND sz.status = 'veroeffentlicht'
+       ORDER BY k.erstellt_am`
+    )
+    .all(req.user!.sub) as { zuweisung_id: number; autor_name: string; text: string; erstellt_am: string }[];
+
+  const nachZuweisung = new Map<number, { autorName: string; text: string; erstelltAm: string }[]>();
+  for (const k of kommentare) {
+    if (!nachZuweisung.has(k.zuweisung_id)) nachZuweisung.set(k.zuweisung_id, []);
+    nachZuweisung.get(k.zuweisung_id)!.push({ autorName: k.autor_name, text: k.text, erstelltAm: k.erstellt_am });
+  }
+
+  res.json(eintraege.map((e) => ({ ...e, kommentare: nachZuweisung.get(e.id) ?? [] })));
 });
 
 // iCal-Feed je Mitarbeiter (Abo im privaten Kalender)

@@ -9,9 +9,11 @@ export function formatDatum(iso: string | null | undefined): string {
   return `${tag}.${monat}.${jahr}`;
 }
 
+// Trennzeichen zwischen Datum und Zeit ist je nach Quelle "T" (ISO) oder ein Leerzeichen
+// (SQLite CURRENT_TIMESTAMP, z. B. "2026-08-03 09:02:49").
 export function formatDatumZeit(iso: string | null | undefined): string {
   if (!iso) return "";
-  const [datumsteil, zeitteil] = iso.split("T");
+  const [datumsteil, zeitteil] = iso.split(/[T ]/);
   const datum = formatDatum(datumsteil);
   if (!zeitteil) return datum;
   return `${datum} ${zeitteil.slice(0, 5)} Uhr`;

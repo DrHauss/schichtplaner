@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { db } from "../lib/db";
-import { requireAuth } from "../middleware/auth";
+import { requireAuth, AuthedRequest } from "../middleware/auth";
 
 export const uebersichtRouter = Router();
 uebersichtRouter.use(requireAuth);
@@ -9,7 +9,7 @@ uebersichtRouter.use(requireAuth);
 // sichtbar, unabhaengig von der eigenen Mitgliedschaft -- Entwuerfe bleiben bewusst nur fuer die
 // Planer der jeweiligen Planungseinheit sichtbar (Plantafel), hier zaehlt nur der veroeffentlichte
 // Stand.
-uebersichtRouter.get("/", (req, res) => {
+uebersichtRouter.get("/", (req: AuthedRequest, res) => {
   const { von, bis } = req.query as { von?: string; bis?: string };
   if (!von || !bis) return res.status(400).json({ error: "von und bis erforderlich" });
 
@@ -27,6 +27,41 @@ uebersichtRouter.get("/", (req, res) => {
     )
     .all(von, bis) as any[];
 
+  // Kommentare der veroeffentlichten Schichten im Zeitraum. 'nur_planer' sieht nur, wer Planer
+  // genau dieser Planungseinheit ist (oder Admin) -- konsistent zur Plantafel-Route.
+  const planerPeIds = new Set(
+    (
+      db
+        .prepare("SELECT planungseinheit_id FROM mitgliedschaft WHERE benutzer_id = ? AND rolle = 'planer'")
+        .all(req.user!.sub) as { planungseinheit_id: number }[]
+    ).map((m) => m.planungseinheit_id)
+  );
+  const kommentarZeilen = db
+    .prepare(
+      `SELECT k.id, k.zuweisung_id, b.name AS autor_name, k.text, k.sichtbarkeit, k.erstellt_am,
+              sa.planungseinheit_id AS pe_id
+       FROM schicht_kommentar k
+       JOIN schicht_zuweisung sz ON sz.id = k.zuweisung_id
+       JOIN schichtart sa ON sa.id = sz.schichtart_id
+       JOIN benutzer b ON b.id = k.autor_id
+       WHERE sz.status = 'veroeffentlicht' AND sz.datum BETWEEN ? AND ?
+       ORDER BY k.erstellt_am`
+    )
+    .all(von, bis) as any[];
+
+  const kommentareNachZuweisung = new Map<number, any[]>();
+  for (const k of kommentarZeilen) {
+    if (k.sichtbarkeit !== "oeffentlich" && !req.user!.istAdmin && !planerPeIds.has(k.pe_id)) continue;
+    if (!kommentareNachZuweisung.has(k.zuweisung_id)) kommentareNachZuweisung.set(k.zuweisung_id, []);
+    kommentareNachZuweisung.get(k.zuweisung_id)!.push({
+      id: k.id,
+      autorName: k.autor_name,
+      text: k.text,
+      sichtbarkeit: k.sichtbarkeit,
+      erstelltAm: k.erstellt_am,
+    });
+  }
+
   const zuweisungenNachPe = new Map<number, any[]>();
   for (const z of zeilen) {
     if (!zuweisungenNachPe.has(z.pe_id)) zuweisungenNachPe.set(z.pe_id, []);
@@ -41,6 +76,7 @@ uebersichtRouter.get("/", (req, res) => {
       farbe: z.farbe,
       beginn: z.beginn,
       ende: z.ende,
+      kommentare: kommentareNachZuweisung.get(z.zuweisung_id) ?? [],
     });
   }
 

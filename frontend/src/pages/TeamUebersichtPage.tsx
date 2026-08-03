@@ -1,6 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
 
+interface ZuweisungKommentar {
+  id: number;
+  autorName: string;
+  text: string;
+  sichtbarkeit: "oeffentlich" | "nur_planer";
+  erstelltAm: string;
+}
+
 interface Zuweisung {
   id: number;
   datum: string;
@@ -11,6 +19,8 @@ interface Zuweisung {
   farbe: string;
   beginn: string;
   ende: string;
+  // Der Server liefert 'nur_planer'-Kommentare nur an Planer der jeweiligen Einheit bzw. Admins.
+  kommentare?: ZuweisungKommentar[];
 }
 
 interface PlanungseinheitUebersicht {
@@ -145,16 +155,26 @@ export default function TeamUebersichtPage() {
                             return (
                               <td key={t} className={tagKlasse(t)}>
                                 {treffer.length > 0 ? (
-                                  treffer.map((z) => (
-                                    <span
-                                      key={z.id}
-                                      className="badge"
-                                      style={{ background: z.farbe }}
-                                      title={`${z.bezeichnung} (${z.beginn}–${z.ende})`}
-                                    >
-                                      {z.kuerzel}
-                                    </span>
-                                  ))
+                                  treffer.map((z) => {
+                                    const kommentare = z.kommentare ?? [];
+                                    const titel =
+                                      `${z.bezeichnung} (${z.beginn}–${z.ende})` +
+                                      (kommentare.length > 0
+                                        ? "\n\n" +
+                                          kommentare
+                                            .map(
+                                              (k) =>
+                                                `${k.sichtbarkeit === "nur_planer" ? "[nur Planer] " : ""}${k.autorName}: ${k.text}`
+                                            )
+                                            .join("\n")
+                                        : "");
+                                    return (
+                                      <span key={z.id} className="badge" style={{ background: z.farbe }} title={titel}>
+                                        {z.kuerzel}
+                                        {kommentare.length > 0 && <span className="kommentar-marker" />}
+                                      </span>
+                                    );
+                                  })
                                 ) : (
                                   <span className="freischicht-hinweis" title="Freischicht">
                                     frei

@@ -11,6 +11,8 @@ interface PlanEintrag {
   farbe: string;
   beginn: string;
   ende: string;
+  // Nur oeffentliche Kommentare des Planers -- interne Planer-Notizen liefert der Server hier nicht.
+  kommentare?: { autorName: string; text: string; erstelltAm: string }[];
 }
 
 interface Benachrichtigung {
@@ -92,6 +94,11 @@ export default function MeinPlanPage() {
                     {p.kuerzel}
                   </span>{" "}
                   {p.bezeichnung}
+                  {(p.kommentare ?? []).map((k, i) => (
+                    <div key={i} className="kommentar-hinweis">
+                      {k.autorName}: {k.text}
+                    </div>
+                  ))}
                 </td>
                 <td>
                   {p.beginn}–{p.ende}

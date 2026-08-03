@@ -227,6 +227,18 @@ CREATE TABLE IF NOT EXISTS schichtblock_vorlage_eintrag (
   schichtart_id   INTEGER NOT NULL REFERENCES schichtart(id) ON DELETE CASCADE
 );
 
+-- Kommentare an einzelnen Schicht-Zuweisungen: nur Planer (bzw. Admins) duerfen kommentieren,
+-- mehrere Kommentare je Zuweisung. Sichtbarkeit 'oeffentlich' = sichtbar fuer alle, die die
+-- Schicht sehen (Team-Uebersicht, Mein Plan); 'nur_planer' = nur Planer der Planungseinheit/Admins.
+CREATE TABLE IF NOT EXISTS schicht_kommentar (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  zuweisung_id  INTEGER NOT NULL REFERENCES schicht_zuweisung(id) ON DELETE CASCADE,
+  autor_id      INTEGER NOT NULL REFERENCES benutzer(id) ON DELETE CASCADE,
+  text          TEXT NOT NULL,
+  sichtbarkeit  TEXT NOT NULL DEFAULT 'nur_planer' CHECK (sichtbarkeit IN ('oeffentlich','nur_planer')),
+  erstellt_am   TEXT DEFAULT CURRENT_TIMESTAMP
+);
+
 -- Feiertage je Jahr: beim ersten Zugriff auf ein Jahr automatisch aus der gesetzlichen
 -- NRW-Regel generiert (siehe lib/feiertage.ts), danach bearbeitbar (Datum/Bezeichnung/ist_frei)
 -- und um Sonderregelungen erweiterbar (zusaetzliche, manuell angelegte Eintraege).

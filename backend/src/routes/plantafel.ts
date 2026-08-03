@@ -8,8 +8,20 @@ import { istPlanerFuerPlanungseinheit } from "../lib/berechtigung";
 export const plantafelRouter = Router();
 plantafelRouter.use(requireAuth);
 
+// Die Planungseinheit einer Zuweisung haengt an deren Schichtart -- noetig, um die
+// Planer-Berechtigung zu pruefen, ohne dass der Client sie mitschicken muss.
+function peIdFuerZuweisung(zuweisungId: string | number): number | undefined {
+  const row = db
+    .prepare(
+      `SELECT sa.planungseinheit_id FROM schicht_zuweisung sz
+       JOIN schichtart sa ON sa.id = sz.schichtart_id WHERE sz.id = ?`
+    )
+    .get(zuweisungId) as { planungseinheit_id: number } | undefined;
+  return row?.planungseinheit_id;
+}
+
 // Plantafel-Daten fuer eine Planungseinheit im Zeitraum laden
-plantafelRouter.get("/planungseinheiten/:id/plantafel", (req, res) => {
+plantafelRouter.get("/planungseinheiten/:id/plantafel", (req: AuthedRequest, res) => {
   const { von, bis } = req.query as { von?: string; bis?: string };
   if (!von || !bis) return res.status(400).json({ error: "von und bis erforderlich" });
 
@@ -35,7 +47,24 @@ plantafelRouter.get("/planungseinheiten/:id/plantafel", (req, res) => {
     )
     .all(req.params.id);
 
-  res.json({ mitarbeiter, zuweisungen, schichtarten, bedarf });
+  // Kommentare des Zeitraums in einer Query mitladen (kein N+1). Wer kein Planer dieser
+  // Planungseinheit ist, sieht die als 'nur_planer' markierten Kommentare nicht.
+  const istPlaner = istPlanerFuerPlanungseinheit(req, Number(req.params.id));
+  const kommentare = (
+    db
+      .prepare(
+        `SELECT k.id, k.zuweisung_id, k.autor_id, b.name AS autor_name, k.text, k.sichtbarkeit, k.erstellt_am
+         FROM schicht_kommentar k
+         JOIN schicht_zuweisung sz ON sz.id = k.zuweisung_id
+         JOIN schichtart sa ON sa.id = sz.schichtart_id
+         JOIN benutzer b ON b.id = k.autor_id
+         WHERE sa.planungseinheit_id = ? AND sz.datum BETWEEN ? AND ?
+         ORDER BY k.erstellt_am`
+      )
+      .all(req.params.id, von, bis) as { sichtbarkeit: string }[]
+  ).filter((k) => istPlaner || k.sichtbarkeit === "oeffentlich");
+
+  res.json({ mitarbeiter, zuweisungen, schichtarten, bedarf, kommentare });
 });
 
 // Schicht zuweisen (mit Konfliktpruefung)
@@ -57,8 +86,54 @@ plantafelRouter.post("/zuweisungen", requirePlaner(), (req: AuthedRequest, res) 
   res.status(201).json({ id: info.lastInsertRowid, konflikte });
 });
 
-plantafelRouter.delete("/zuweisungen/:id", requirePlaner(), (req, res) => {
+// Die Planungseinheit wird aus der Zuweisung selbst abgeleitet -- requirePlaner() koennte sie
+// hier nicht ermitteln, da beim DELETE weder Body noch Query eine planungseinheitId enthalten.
+// Zugehoerige Kommentare verschwinden per ON DELETE CASCADE mit.
+plantafelRouter.delete("/zuweisungen/:id", (req: AuthedRequest, res) => {
+  const peId = peIdFuerZuweisung(req.params.id);
+  if (!peId) return res.status(404).json({ error: "Zuweisung nicht gefunden" });
+  if (!istPlanerFuerPlanungseinheit(req, peId)) {
+    return res.status(403).json({ error: "Keine Planer-Berechtigung fuer diese Planungseinheit" });
+  }
   db.prepare("DELETE FROM schicht_zuweisung WHERE id = ?").run(req.params.id);
+  res.json({ ok: true });
+});
+
+// Kommentare an einer Zuweisung: nur Planer der Planungseinheit (bzw. Admins) duerfen
+// kommentieren; je Kommentar wird entschieden, ob er oeffentlich oder nur fuer Planer sichtbar ist.
+plantafelRouter.post("/zuweisungen/:id/kommentare", (req: AuthedRequest, res) => {
+  const { text, sichtbarkeit } = req.body ?? {};
+  if (!text || !String(text).trim()) return res.status(400).json({ error: "text erforderlich" });
+  if (!["oeffentlich", "nur_planer"].includes(sichtbarkeit)) {
+    return res.status(400).json({ error: "sichtbarkeit muss 'oeffentlich' oder 'nur_planer' sein" });
+  }
+  const peId = peIdFuerZuweisung(req.params.id);
+  if (!peId) return res.status(404).json({ error: "Zuweisung nicht gefunden" });
+  if (!istPlanerFuerPlanungseinheit(req, peId)) {
+    return res.status(403).json({ error: "Keine Planer-Berechtigung fuer diese Planungseinheit" });
+  }
+  const info = db
+    .prepare("INSERT INTO schicht_kommentar (zuweisung_id, autor_id, text, sichtbarkeit) VALUES (?,?,?,?)")
+    .run(req.params.id, req.user!.sub, String(text).trim(), sichtbarkeit);
+  const kommentar = db
+    .prepare(
+      `SELECT k.id, k.zuweisung_id, k.autor_id, b.name AS autor_name, k.text, k.sichtbarkeit, k.erstellt_am
+       FROM schicht_kommentar k JOIN benutzer b ON b.id = k.autor_id WHERE k.id = ?`
+    )
+    .get(info.lastInsertRowid);
+  res.status(201).json(kommentar);
+});
+
+plantafelRouter.delete("/kommentare/:id", (req: AuthedRequest, res) => {
+  const kommentar = db.prepare("SELECT zuweisung_id FROM schicht_kommentar WHERE id = ?").get(req.params.id) as
+    | { zuweisung_id: number }
+    | undefined;
+  if (!kommentar) return res.status(404).json({ error: "Kommentar nicht gefunden" });
+  const peId = peIdFuerZuweisung(kommentar.zuweisung_id);
+  if (!peId || !istPlanerFuerPlanungseinheit(req, peId)) {
+    return res.status(403).json({ error: "Keine Planer-Berechtigung fuer diese Planungseinheit" });
+  }
+  db.prepare("DELETE FROM schicht_kommentar WHERE id = ?").run(req.params.id);
   res.json({ ok: true });
 });
 
