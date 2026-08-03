@@ -173,6 +173,13 @@ export default function PlantafelPage() {
   const [werkzeug, setWerkzeug] = useState<Werkzeug | null>(null);
   const [detailId, setDetailId] = useState<number | null>(null);
   const [freischichtDetail, setFreischichtDetail] = useState<{ peId: number; benutzerId: number; datum: string } | null>(null);
+  // Radierer auf einer oder mehreren markierten Zellen: enthaelt die Markierung mehr als eine
+  // Schicht-/Bereitschaftsart, wird statt sofort alles zu loeschen erst gefragt, welche Art(en)
+  // entfernt werden sollen -- der Dialog zeigt alle in der Markierung vorkommenden Arten
+  // gesammelt an (nicht Zelle fuer Zelle). Enthaelt die Markierung nur eine einzige Art (auch
+  // ueber mehrere Zellen/Tage hinweg) oder nur einen einzigen Eintrag, wird direkt geloescht, da
+  // dort nichts mehrdeutig ist.
+  const [radiererAuswahl, setRadiererAuswahl] = useState<{ peId: number; benutzerId: number; datum: string }[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -371,6 +378,67 @@ export default function PlantafelPage() {
     load();
   }
 
+  // Alle Zuweisungen/Bereitschaften der markierten Zellen gesammelt (mit peId je Eintrag, da
+  // eine Loeschung die jeweils richtige Planungseinheit fuer kommentareBehalten braucht).
+  function gesammelteZuweisungen(zellen: { peId: number; benutzerId: number; datum: string }[]) {
+    return zellen.flatMap((z) => zellenZuweisungen(z.peId, z.benutzerId, z.datum).map((zw) => ({ ...zw, peId: z.peId })));
+  }
+  function gesammelteBereitschaften(zellen: { peId: number; benutzerId: number; datum: string }[]) {
+    return zellen.flatMap((z) => zellenBereitschaften(z.peId, z.benutzerId, z.datum));
+  }
+
+  // Radierer auf einer oder mehreren markierten Zellen (Einzelklick oder Ziehen): kommen darin
+  // mehrere Schicht-/Bereitschaftsarten vor, wird gefragt, welche Art(en) geloescht werden sollen
+  // (gesammelt ueber die gesamte Markierung, nicht Zelle fuer Zelle). Kommt nur eine einzige Art
+  // vor (auch mit mehreren Eintraegen derselben Art) oder nur ein einzelner Eintrag insgesamt,
+  // ist "alles loeschen" eindeutig und der Dialog entfaellt.
+  function radiererAusloesen(zellen: { peId: number; benutzerId: number; datum: string }[]) {
+    const zuweisungen = gesammelteZuweisungen(zellen);
+    const bereitschaften = gesammelteBereitschaften(zellen);
+    const anzahlTypen = new Set(zuweisungen.map((z) => z.schichtart_id)).size + new Set(bereitschaften.map((b) => b.bereitschaftsart_id)).size;
+    if (zuweisungen.length + bereitschaften.length <= 1 || anzahlTypen <= 1) {
+      batchLoeschen(zellen);
+      return;
+    }
+    setRadiererAuswahl(zellen);
+  }
+
+  // Loescht eine bestimmte Schicht-/Bereitschaftsart aus der gesamten Markierung (kann mehrere
+  // Zellen/Tage betreffen). Der Dialog bleibt offen, bis die Markierung leer ist (siehe Effekt
+  // unten), damit nacheinander mehrere Arten entfernt werden koennen.
+  async function radiererTypLoeschen(art: "zuweisung" | "bereitschaft", typId: number) {
+    if (!radiererAuswahl) return;
+    setBusy(true);
+    if (art === "zuweisung") {
+      for (const z of gesammelteZuweisungen(radiererAuswahl).filter((z) => z.schichtart_id === typId)) {
+        await api(`/zuweisungen/${z.id}?kommentareBehalten=1&planungseinheitId=${z.peId}`, { method: "DELETE" });
+      }
+    } else {
+      for (const b of gesammelteBereitschaften(radiererAuswahl).filter((b) => b.bereitschaftsart_id === typId)) {
+        await api(`/bereitschaften/${b.id}`, { method: "DELETE" });
+      }
+    }
+    setBusy(false);
+    load();
+  }
+
+  function radiererAlleLoeschen() {
+    if (!radiererAuswahl) return;
+    const zellen = radiererAuswahl;
+    setRadiererAuswahl(null);
+    batchLoeschen(zellen);
+  }
+
+  // Schliesst den Dialog automatisch, sobald in der markierten Auswahl nichts mehr uebrig ist
+  // (z. B. nachdem alle vorkommenden Arten einzeln geloescht wurden).
+  useEffect(() => {
+    if (!radiererAuswahl) return;
+    if (gesammelteZuweisungen(radiererAuswahl).length + gesammelteBereitschaften(radiererAuswahl).length === 0) {
+      setRadiererAuswahl(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [datenNachPe, radiererAuswahl]);
+
   function zieheZelleHinzu(peId: number, benutzerId: number, datum: string) {
     dragZellenRef.current.set(`${peId}|${benutzerId}|${datum}`, { peId, benutzerId, datum });
     setDragTick((t) => t + 1);
@@ -403,7 +471,7 @@ export default function PlantafelPage() {
       if (zellen.length === 0 || !werkzeug) return;
       if (werkzeug.art === "schichtart") batchZuweisen(zellen, werkzeug.schichtart.id);
       else if (werkzeug.art === "bereitschaft") batchBereitschaftenZuweisen(zellen, werkzeug.bereitschaftsart.id);
-      else if (werkzeug.art === "radierer") batchLoeschen(zellen);
+      else if (werkzeug.art === "radierer") radiererAusloesen(zellen);
     }
     window.addEventListener("mouseup", beenden);
     return () => window.removeEventListener("mouseup", beenden);
@@ -743,6 +811,19 @@ export default function PlantafelPage() {
           onGeaendert={load}
         />
       )}
+
+      {radiererAuswahl && (
+        <RadiererTypAuswahlDialog
+          anzahlZellen={radiererAuswahl.length}
+          zuweisungen={gesammelteZuweisungen(radiererAuswahl)}
+          bereitschaften={gesammelteBereitschaften(radiererAuswahl)}
+          schichtarten={schichtarten}
+          bereitschaftsarten={bereitschaftsarten}
+          onTypLoeschen={radiererTypLoeschen}
+          onAlle={radiererAlleLoeschen}
+          onAbbrechen={() => setRadiererAuswahl(null)}
+        />
+      )}
     </div>
   );
 }
@@ -953,6 +1034,99 @@ function FreischichtDetail({
           </div>
         </form>
         {fehler && <div className="error">{fehler}</div>}
+      </div>
+    </>
+  );
+}
+
+// Radierer auf einer Markierung (eine oder mehrere Zellen), die mehr als eine Schicht-/
+// Bereitschaftsart enthaelt: zeigt alle in der Markierung vorkommenden Arten gesammelt an
+// (nicht Zelle fuer Zelle) und laesst gezielt eine Art loeschen, statt kommentarlos alles zu
+// entfernen. Bleibt offen, bis die Markierung leer ist -- so lassen sich nacheinander mehrere
+// Arten entfernen, ohne den Dialog neu oeffnen zu muessen.
+function RadiererTypAuswahlDialog({
+  anzahlZellen,
+  zuweisungen,
+  bereitschaften,
+  schichtarten,
+  bereitschaftsarten,
+  onTypLoeschen,
+  onAlle,
+  onAbbrechen,
+}: {
+  anzahlZellen: number;
+  zuweisungen: Zuweisung[];
+  bereitschaften: Bereitschaft[];
+  schichtarten: Schichtart[];
+  bereitschaftsarten: Bereitschaftsart[];
+  onTypLoeschen: (art: "zuweisung" | "bereitschaft", typId: number) => void;
+  onAlle: () => void;
+  onAbbrechen: () => void;
+}) {
+  const zuweisungenNachTyp = new Map<number, number>();
+  for (const z of zuweisungen) zuweisungenNachTyp.set(z.schichtart_id, (zuweisungenNachTyp.get(z.schichtart_id) ?? 0) + 1);
+  const bereitschaftenNachTyp = new Map<number, number>();
+  for (const b of bereitschaften) bereitschaftenNachTyp.set(b.bereitschaftsart_id, (bereitschaftenNachTyp.get(b.bereitschaftsart_id) ?? 0) + 1);
+
+  return (
+    <>
+      <div className="popover-backdrop" onClick={onAbbrechen} />
+      <div className="popover">
+        <div className="popover-kopf">
+          <div>
+            <strong>Mehrere Schicht-/Bereitschaftsarten markiert</strong>
+            <div className="hint">{anzahlZellen} Zelle(n) markiert</div>
+          </div>
+          <button type="button" className="popover-schliessen" onClick={onAbbrechen} title="Schließen">
+            ×
+          </button>
+        </div>
+
+        <p className="hint">Welche Art soll aus der Markierung gelöscht werden?</p>
+
+        <ul className="radierer-auswahl-liste">
+          {Array.from(zuweisungenNachTyp.entries()).map(([schichtartId, anzahl]) => {
+            const sa = schichtarten.find((s) => s.id === schichtartId);
+            return (
+              <li key={`z${schichtartId}`}>
+                <span className="badge" style={{ background: sa?.farbe }}>
+                  {sa?.kuerzel}
+                </span>
+                <span>
+                  {sa?.bezeichnung} ({anzahl}×)
+                </span>
+                <button type="button" onClick={() => onTypLoeschen("zuweisung", schichtartId)}>
+                  Diese Schichtart löschen
+                </button>
+              </li>
+            );
+          })}
+          {Array.from(bereitschaftenNachTyp.entries()).map(([bereitschaftsartId, anzahl]) => {
+            const ba = bereitschaftsarten.find((x) => x.id === bereitschaftsartId);
+            return (
+              <li key={`b${bereitschaftsartId}`}>
+                <span className="bereitschaft-chip" style={{ background: ba?.farbe }}>
+                  {ba?.kuerzel}
+                </span>
+                <span>
+                  {ba?.bezeichnung} ({anzahl}×)
+                </span>
+                <button type="button" onClick={() => onTypLoeschen("bereitschaft", bereitschaftsartId)}>
+                  Diese Bereitschaftsart löschen
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+
+        <div className="popover-fuss">
+          <button type="button" onClick={onAlle}>
+            Alle löschen
+          </button>
+          <button type="button" onClick={onAbbrechen}>
+            Abbrechen
+          </button>
+        </div>
       </div>
     </>
   );

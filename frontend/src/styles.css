@@ -176,8 +176,11 @@ body {
 .sichtbarkeit-nur-planer { background: #fef3c7; color: #92400e; }
 .kommentar-form { display: flex; flex-direction: column; gap: 0.4rem; }
 .kommentar-form textarea { padding: 0.4rem; border: 1px solid #cbd5e1; border-radius: 4px; font-family: inherit; }
-.popover-fuss { margin-top: 0.75rem; border-top: 1px solid #f1f5f9; padding-top: 0.5rem; }
+.popover-fuss { margin-top: 0.75rem; border-top: 1px solid #f1f5f9; padding-top: 0.5rem; display: flex; gap: 0.5rem; }
 .kommentar-hinweis { color: #475569; font-size: 0.8rem; }
+.radierer-auswahl-liste { list-style: none; margin: 0.5rem 0; padding: 0; display: flex; flex-direction: column; gap: 0.4rem; }
+.radierer-auswahl-liste li { display: flex; align-items: center; gap: 0.5rem; border-top: 1px solid #f1f5f9; padding-top: 0.4rem; }
+.radierer-auswahl-liste li button { margin-left: auto; }
 
 /* Team-Uebersicht: monatsweise, kompakt, mit hervorgehobenen Wochenenden/Feiertagen */
 .uebersicht-monat-scroll { overflow-x: auto; margin-bottom: 1rem; }
