@@ -19,8 +19,16 @@ interface Schichtart {
 // Schichtarten werden grundsaetzlich alphabetisch sortiert und in Dienst/Abwesenheit gruppiert
 // dargestellt -- localeCompare("de") statt SQLite-Sortierung, da SQLite COLLATE NOCASE nur
 // ASCII-Gross-/Kleinschreibung faltet, keine Umlaute.
-function nachDienstUndAbwesenheitGruppiert<T extends { kategorie: string; bezeichnung: string }>(liste: T[]) {
-  const sortiert = (arr: T[]) => [...arr].sort((a, b) => a.bezeichnung.localeCompare(b.bezeichnung, "de"));
+function nachDienstUndAbwesenheitGruppiert<
+  T extends { kategorie: string; bezeichnung: string; archiviert?: boolean | number }
+>(liste: T[]) {
+  // Archivierte Schichtarten wandern innerhalb ihrer Gruppe immer ans Ende, unabhaengig vom Alphabet.
+  const sortiert = (arr: T[]) =>
+    [...arr].sort((a, b) => {
+      const archivDiff = Number(!!a.archiviert) - Number(!!b.archiviert);
+      if (archivDiff !== 0) return archivDiff;
+      return a.bezeichnung.localeCompare(b.bezeichnung, "de");
+    });
   return {
     dienst: sortiert(liste.filter((s) => s.kategorie !== "abwesenheit")),
     abwesenheit: sortiert(liste.filter((s) => s.kategorie === "abwesenheit")),
@@ -124,9 +132,7 @@ export default function StammdatenPage() {
     <div className="page">
       <h1>Stammdaten</h1>
 
-      {einheitenOptionen.length > 0 && (
-        <SchichtartenSektion peId={peId} einheitenOptionen={einheitenOptionen} onPeChange={setPeId} />
-      )}
+      {einheitenOptionen.length > 0 && <SchichtartenSektion />}
       {peId != null && <SchichtblockVorlagenSektion peId={peId} />}
       {einheitenOptionen.length > 0 && <FeiertageSektion />}
 
@@ -136,15 +142,9 @@ export default function StammdatenPage() {
   );
 }
 
-function SchichtartenSektion({
-  peId,
-  einheitenOptionen,
-  onPeChange,
-}: {
-  peId: number | null;
-  einheitenOptionen: PlanungseinheitOption[];
-  onPeChange: (id: number) => void;
-}) {
+// Schichtarten sind global -- sie gelten fuer alle Planungseinheiten gleichermassen, daher ohne
+// Planungseinheiten-Auswahl.
+function SchichtartenSektion() {
   const [schichtarten, setSchichtarten] = useState<Schichtart[]>([]);
   const [kuerzel, setKuerzel] = useState("");
   const [bezeichnung, setBezeichnung] = useState("");
@@ -160,18 +160,16 @@ function SchichtartenSektion({
   const [error, setError] = useState<string | null>(null);
 
   function load() {
-    if (peId)
-      api<Schichtart[]>(`/planungseinheiten/${peId}/schichtarten`).then((rows) =>
-        setSchichtarten(rows.map((s) => ({ ...s, ganztags: !!s.ganztags, archiviert: !!s.archiviert })))
-      );
+    api<Schichtart[]>("/schichtarten").then((rows) =>
+      setSchichtarten(rows.map((s) => ({ ...s, ganztags: !!s.ganztags, archiviert: !!s.archiviert })))
+    );
   }
 
-  useEffect(load, [peId]);
+  useEffect(load, []);
 
   async function anlegen(e: FormEvent) {
     e.preventDefault();
-    if (!peId) return;
-    await api(`/planungseinheiten/${peId}/schichtarten`, {
+    await api("/schichtarten", {
       method: "POST",
       body: JSON.stringify({
         kuerzel,
@@ -237,15 +235,7 @@ function SchichtartenSektion({
   return (
     <section>
       <h2>Schichtarten</h2>
-      {einheitenOptionen.length > 1 && (
-        <select value={peId ?? ""} onChange={(e) => onPeChange(Number(e.target.value))}>
-          {einheitenOptionen.map((m) => (
-            <option key={m.id} value={m.id}>
-              {m.name}
-            </option>
-          ))}
-        </select>
-      )}
+      <p className="hint">Schichtarten gelten global für alle Teams gleichermaßen.</p>
 
       <form className="card form-inline" onSubmit={anlegen}>
         <label>
@@ -875,7 +865,7 @@ function SchichtblockVorlagenSektion({ peId }: { peId: number }) {
   const [error, setError] = useState<string | null>(null);
 
   function laden() {
-    api<Schichtart[]>(`/planungseinheiten/${peId}/schichtarten`).then((s) => {
+    api<Schichtart[]>("/schichtarten").then((s) => {
       setSchichtarten(s);
       const ersteAktive = s.find((x) => !x.archiviert)?.id ?? 0;
       setEintraege((prev) => prev.map((e) => ({ ...e, schichtartId: e.schichtartId || ersteAktive })));

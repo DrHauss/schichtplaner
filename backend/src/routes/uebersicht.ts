@@ -13,6 +13,10 @@ uebersichtRouter.get("/", (req: AuthedRequest, res) => {
   const { von, bis } = req.query as { von?: string; bis?: string };
   if (!von || !bis) return res.status(400).json({ error: "von und bis erforderlich" });
 
+  // Schichtarten sind global -- eine Zuweisung erscheint daher unter JEDER Planungseinheit, in
+  // der der Mitarbeiter Mitglied ist (nicht mehr nur unter der PE der Schichtart, die es so nicht
+  // mehr gibt). Das ist genau das gewuenschte Verhalten fuer Mitarbeiter in mehreren Teams: ihre
+  // Schicht gilt fuer alle ihre Teams gleichermassen.
   const zeilen = db
     .prepare(
       `SELECT p.id as pe_id, p.name as pe_name, p.standort,
@@ -20,29 +24,32 @@ uebersichtRouter.get("/", (req: AuthedRequest, res) => {
               sa.id as schichtart_id, sa.kuerzel, sa.bezeichnung, sa.farbe, sa.beginn, sa.ende, sa.ganztags
        FROM schicht_zuweisung sz
        JOIN schichtart sa ON sa.id = sz.schichtart_id
-       JOIN planungseinheit p ON p.id = sa.planungseinheit_id
        JOIN benutzer b ON b.id = sz.benutzer_id
+       JOIN mitgliedschaft m ON m.benutzer_id = sz.benutzer_id AND m.rolle IN ('mitarbeiter','planer')
+       JOIN planungseinheit p ON p.id = m.planungseinheit_id
        WHERE sz.status = 'veroeffentlicht' AND sz.datum BETWEEN ? AND ?
        ORDER BY p.name, b.name, sz.datum`
     )
     .all(von, bis) as any[];
 
   // Kommentare der veroeffentlichten Schichten im Zeitraum. 'nur_planer' sieht nur, wer Planer
-  // genau dieser Planungseinheit ist (oder Admin) -- konsistent zur Plantafel-Route.
-  const planerPeIds = new Set(
+  // eines mit dem betroffenen Mitarbeiter geteilten Teams ist (oder Admin) -- konsistent zur
+  // Plantafel-Route (istPlanerFuerMitarbeiter), da Schichtarten keiner PE mehr direkt zugeordnet sind.
+  const mitarbeiterAlsPlanerSichtbar = new Set(
     (
       db
-        .prepare("SELECT planungseinheit_id FROM mitgliedschaft WHERE benutzer_id = ? AND rolle = 'planer'")
-        .all(req.user!.sub) as { planungseinheit_id: number }[]
-    ).map((m) => m.planungseinheit_id)
+        .prepare(
+          `SELECT DISTINCT m2.benutzer_id FROM mitgliedschaft m1 JOIN mitgliedschaft m2 ON m1.planungseinheit_id = m2.planungseinheit_id
+           WHERE m1.benutzer_id = ? AND m1.rolle = 'planer'`
+        )
+        .all(req.user!.sub) as { benutzer_id: number }[]
+    ).map((m) => m.benutzer_id)
   );
   const kommentarZeilen = db
     .prepare(
-      `SELECT k.id, k.zuweisung_id, b.name AS autor_name, k.text, k.sichtbarkeit, k.erstellt_am,
-              sa.planungseinheit_id AS pe_id
+      `SELECT k.id, k.zuweisung_id, sz.benutzer_id, b.name AS autor_name, k.text, k.sichtbarkeit, k.erstellt_am
        FROM schicht_kommentar k
        JOIN schicht_zuweisung sz ON sz.id = k.zuweisung_id
-       JOIN schichtart sa ON sa.id = sz.schichtart_id
        JOIN benutzer b ON b.id = k.autor_id
        WHERE sz.status = 'veroeffentlicht' AND sz.datum BETWEEN ? AND ?
        ORDER BY k.erstellt_am`
@@ -51,7 +58,7 @@ uebersichtRouter.get("/", (req: AuthedRequest, res) => {
 
   const kommentareNachZuweisung = new Map<number, any[]>();
   for (const k of kommentarZeilen) {
-    if (k.sichtbarkeit !== "oeffentlich" && !req.user!.istAdmin && !planerPeIds.has(k.pe_id)) continue;
+    if (k.sichtbarkeit !== "oeffentlich" && !req.user!.istAdmin && !mitarbeiterAlsPlanerSichtbar.has(k.benutzer_id)) continue;
     if (!kommentareNachZuweisung.has(k.zuweisung_id)) kommentareNachZuweisung.set(k.zuweisung_id, []);
     kommentareNachZuweisung.get(k.zuweisung_id)!.push({
       id: k.id,
@@ -62,8 +69,16 @@ uebersichtRouter.get("/", (req: AuthedRequest, res) => {
     });
   }
 
-  // Kommentare an Freischichten (Tagen ohne Zuweisung) im Zeitraum, gleiche Sichtbarkeitsregel
-  // wie bei Kommentaren an echten Zuweisungen.
+  // Kommentare an Freischichten (Tagen ohne Zuweisung) im Zeitraum. Diese haengen (anders als
+  // Kommentare an echten Zuweisungen) weiterhin direkt an einer konkreten Planungseinheit --
+  // Sichtbarkeit von 'nur_planer' richtet sich daher nach der Planer-Rolle in genau dieser PE.
+  const planerPeIds = new Set(
+    (
+      db
+        .prepare("SELECT planungseinheit_id FROM mitgliedschaft WHERE benutzer_id = ? AND rolle = 'planer'")
+        .all(req.user!.sub) as { planungseinheit_id: number }[]
+    ).map((m) => m.planungseinheit_id)
+  );
   const freischichtZeilen = db
     .prepare(
       `SELECT fk.id, fk.planungseinheit_id AS pe_id, fk.benutzer_id, fk.datum, b.name AS autor_name,

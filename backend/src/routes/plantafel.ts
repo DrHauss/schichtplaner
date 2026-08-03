@@ -3,21 +3,19 @@ import { db } from "../lib/db";
 import { requireAuth, requirePlaner, AuthedRequest } from "../middleware/auth";
 import { pruefeKonflikte, Konflikt } from "../lib/regelwerk";
 import { benachrichtige } from "../lib/notify";
-import { istPlanerFuerPlanungseinheit } from "../lib/berechtigung";
+import { istPlanerFuerPlanungseinheit, istPlanerFuerMitarbeiter } from "../lib/berechtigung";
 
 export const plantafelRouter = Router();
 plantafelRouter.use(requireAuth);
 
-// Die Planungseinheit einer Zuweisung haengt an deren Schichtart -- noetig, um die
-// Planer-Berechtigung zu pruefen, ohne dass der Client sie mitschicken muss.
-function peIdFuerZuweisung(zuweisungId: string | number): number | undefined {
-  const row = db
-    .prepare(
-      `SELECT sa.planungseinheit_id FROM schicht_zuweisung sz
-       JOIN schichtart sa ON sa.id = sz.schichtart_id WHERE sz.id = ?`
-    )
-    .get(zuweisungId) as { planungseinheit_id: number } | undefined;
-  return row?.planungseinheit_id;
+// Schichtarten sind global (siehe lib/db.ts) -- eine Zuweisung "gehoert" damit keiner Planungs-
+// einheit mehr direkt, sondern nur noch dem Mitarbeiter. Fuer Rechteentscheidungen wird daher der
+// Mitarbeiter der Zuweisung ermittelt (siehe istPlanerFuerMitarbeiter).
+function benutzerIdFuerZuweisung(zuweisungId: string | number): number | undefined {
+  const row = db.prepare("SELECT benutzer_id FROM schicht_zuweisung WHERE id = ?").get(zuweisungId) as
+    | { benutzer_id: number }
+    | undefined;
+  return row?.benutzer_id;
 }
 
 // Plantafel-Daten fuer eine Planungseinheit im Zeitraum laden
@@ -30,38 +28,42 @@ plantafelRouter.get("/planungseinheiten/:id/plantafel", (req: AuthedRequest, res
       `SELECT b.id, b.name FROM mitgliedschaft m JOIN benutzer b ON b.id = m.benutzer_id
        WHERE m.planungseinheit_id = ? AND m.rolle IN ('mitarbeiter','planer')`
     )
-    .all(req.params.id);
+    .all(req.params.id) as { id: number; name: string }[];
 
-  const zuweisungen = db
-    .prepare(
-      `SELECT sz.* FROM schicht_zuweisung sz
-       JOIN schichtart sa ON sa.id = sz.schichtart_id
-       WHERE sa.planungseinheit_id = ? AND sz.datum BETWEEN ? AND ?`
-    )
-    .all(req.params.id, von, bis);
+  // Ein Mitarbeiter kann Mitglied mehrerer Planungseinheiten sein; seine Schicht gilt fuer alle
+  // davon (Schichtarten sind global). Die Plantafel zeigt daher ALLE Zuweisungen der Team-
+  // Mitglieder im Zeitraum, unabhaengig davon, ueber welches ihrer Teams sie urspruenglich
+  // zugewiesen wurden.
+  const mitarbeiterIds = mitarbeiter.map((m) => m.id);
+  const zuweisungen =
+    mitarbeiterIds.length === 0
+      ? []
+      : db
+          .prepare(
+            `SELECT * FROM schicht_zuweisung
+             WHERE benutzer_id IN (${mitarbeiterIds.map(() => "?").join(",")}) AND datum BETWEEN ? AND ?`
+          )
+          .all(...mitarbeiterIds, von, bis);
 
-  const schichtarten = db.prepare("SELECT * FROM schichtart WHERE planungseinheit_id = ?").all(req.params.id);
-  const bedarf = db
-    .prepare(
-      `SELECT bb.* FROM besetzungsbedarf bb JOIN schichtart sa ON sa.id = bb.schichtart_id WHERE sa.planungseinheit_id = ?`
-    )
-    .all(req.params.id);
+  const schichtarten = db.prepare("SELECT * FROM schichtart").all();
+  const bedarf = db.prepare("SELECT * FROM besetzungsbedarf").all();
 
   // Kommentare des Zeitraums in einer Query mitladen (kein N+1). Wer kein Planer dieser
   // Planungseinheit ist, sieht die als 'nur_planer' markierten Kommentare nicht.
   const istPlaner = istPlanerFuerPlanungseinheit(req, Number(req.params.id));
   const kommentare = (
-    db
-      .prepare(
-        `SELECT k.id, k.zuweisung_id, k.autor_id, b.name AS autor_name, k.text, k.sichtbarkeit, k.erstellt_am
-         FROM schicht_kommentar k
-         JOIN schicht_zuweisung sz ON sz.id = k.zuweisung_id
-         JOIN schichtart sa ON sa.id = sz.schichtart_id
-         JOIN benutzer b ON b.id = k.autor_id
-         WHERE sa.planungseinheit_id = ? AND sz.datum BETWEEN ? AND ?
-         ORDER BY k.erstellt_am`
-      )
-      .all(req.params.id, von, bis) as { sichtbarkeit: string }[]
+    mitarbeiterIds.length === 0
+      ? []
+      : (db
+          .prepare(
+            `SELECT k.id, k.zuweisung_id, k.autor_id, b.name AS autor_name, k.text, k.sichtbarkeit, k.erstellt_am
+             FROM schicht_kommentar k
+             JOIN schicht_zuweisung sz ON sz.id = k.zuweisung_id
+             JOIN benutzer b ON b.id = k.autor_id
+             WHERE sz.benutzer_id IN (${mitarbeiterIds.map(() => "?").join(",")}) AND sz.datum BETWEEN ? AND ?
+             ORDER BY k.erstellt_am`
+          )
+          .all(...mitarbeiterIds, von, bis) as { sichtbarkeit: string }[])
   ).filter((k) => istPlaner || k.sichtbarkeit === "oeffentlich");
 
   const freischichtKommentare = (
@@ -104,31 +106,46 @@ plantafelRouter.post("/zuweisungen", requirePlaner(), (req: AuthedRequest, res) 
   res.status(201).json({ id: info.lastInsertRowid, konflikte });
 });
 
-// Die Planungseinheit wird aus der Zuweisung selbst abgeleitet -- requirePlaner() koennte sie
-// hier nicht ermitteln, da beim DELETE weder Body noch Query eine planungseinheitId enthalten.
-// Zugehoerige Kommentare verschwinden per ON DELETE CASCADE mit.
+// Da Schichtarten global sind, wird die Berechtigung ueber ein gemeinsames Team mit dem
+// betroffenen Mitarbeiter geprueft (istPlanerFuerMitarbeiter), nicht mehr ueber die (nicht mehr
+// existierende) Planungseinheit der Schichtart. Zugehoerige Kommentare verschwinden per
+// ON DELETE CASCADE mit.
+// ?kommentareBehalten=1&planungseinheitId=X (vom Radierer genutzt): Kommentare der Zuweisung
+// werden vor dem Loeschen in Freischicht-Kommentare der angegebenen Planungseinheit "umgezogen"
+// (der Tag wird ja zur Freischicht), statt sie per ON DELETE CASCADE zu verlieren. Das explizite
+// "Zuweisung loeschen" im Detailfenster nutzt das Flag bewusst nicht -- dort warnt der
+// confirm-Dialog schon vorab ueber den Kommentarverlust.
 plantafelRouter.delete("/zuweisungen/:id", (req: AuthedRequest, res) => {
-  const peId = peIdFuerZuweisung(req.params.id);
-  if (!peId) return res.status(404).json({ error: "Zuweisung nicht gefunden" });
-  if (!istPlanerFuerPlanungseinheit(req, peId)) {
-    return res.status(403).json({ error: "Keine Planer-Berechtigung fuer diese Planungseinheit" });
+  const zuweisung = db.prepare("SELECT benutzer_id, datum FROM schicht_zuweisung WHERE id = ?").get(req.params.id) as
+    | { benutzer_id: number; datum: string }
+    | undefined;
+  if (!zuweisung) return res.status(404).json({ error: "Zuweisung nicht gefunden" });
+  if (!istPlanerFuerMitarbeiter(req, zuweisung.benutzer_id)) {
+    return res.status(403).json({ error: "Keine Planer-Berechtigung fuer diesen Mitarbeiter" });
+  }
+  if (req.query.kommentareBehalten === "1" && req.query.planungseinheitId) {
+    db.prepare(
+      `INSERT INTO freischicht_kommentar (planungseinheit_id, benutzer_id, datum, autor_id, text, sichtbarkeit, erstellt_am)
+       SELECT ?, ?, ?, autor_id, text, sichtbarkeit, erstellt_am FROM schicht_kommentar WHERE zuweisung_id = ?`
+    ).run(req.query.planungseinheitId, zuweisung.benutzer_id, zuweisung.datum, req.params.id);
   }
   db.prepare("DELETE FROM schicht_zuweisung WHERE id = ?").run(req.params.id);
   res.json({ ok: true });
 });
 
-// Kommentare an einer Zuweisung: nur Planer der Planungseinheit (bzw. Admins) duerfen
-// kommentieren; je Kommentar wird entschieden, ob er oeffentlich oder nur fuer Planer sichtbar ist.
+// Kommentare an einer Zuweisung: nur Planer eines mit dem Mitarbeiter geteilten Teams (bzw.
+// Admins) duerfen kommentieren; je Kommentar wird entschieden, ob er oeffentlich oder nur fuer
+// Planer sichtbar ist.
 plantafelRouter.post("/zuweisungen/:id/kommentare", (req: AuthedRequest, res) => {
   const { text, sichtbarkeit } = req.body ?? {};
   if (!text || !String(text).trim()) return res.status(400).json({ error: "text erforderlich" });
   if (!["oeffentlich", "nur_planer"].includes(sichtbarkeit)) {
     return res.status(400).json({ error: "sichtbarkeit muss 'oeffentlich' oder 'nur_planer' sein" });
   }
-  const peId = peIdFuerZuweisung(req.params.id);
-  if (!peId) return res.status(404).json({ error: "Zuweisung nicht gefunden" });
-  if (!istPlanerFuerPlanungseinheit(req, peId)) {
-    return res.status(403).json({ error: "Keine Planer-Berechtigung fuer diese Planungseinheit" });
+  const benutzerId = benutzerIdFuerZuweisung(req.params.id);
+  if (!benutzerId) return res.status(404).json({ error: "Zuweisung nicht gefunden" });
+  if (!istPlanerFuerMitarbeiter(req, benutzerId)) {
+    return res.status(403).json({ error: "Keine Planer-Berechtigung fuer diesen Mitarbeiter" });
   }
   const info = db
     .prepare("INSERT INTO schicht_kommentar (zuweisung_id, autor_id, text, sichtbarkeit) VALUES (?,?,?,?)")
@@ -147,9 +164,9 @@ plantafelRouter.delete("/kommentare/:id", (req: AuthedRequest, res) => {
     | { zuweisung_id: number }
     | undefined;
   if (!kommentar) return res.status(404).json({ error: "Kommentar nicht gefunden" });
-  const peId = peIdFuerZuweisung(kommentar.zuweisung_id);
-  if (!peId || !istPlanerFuerPlanungseinheit(req, peId)) {
-    return res.status(403).json({ error: "Keine Planer-Berechtigung fuer diese Planungseinheit" });
+  const benutzerId = benutzerIdFuerZuweisung(kommentar.zuweisung_id);
+  if (!benutzerId || !istPlanerFuerMitarbeiter(req, benutzerId)) {
+    return res.status(403).json({ error: "Keine Planer-Berechtigung fuer diesen Mitarbeiter" });
   }
   db.prepare("DELETE FROM schicht_kommentar WHERE id = ?").run(req.params.id);
   res.json({ ok: true });
@@ -251,24 +268,24 @@ plantafelRouter.post("/schichtblock-vorlagen/:id/zuweisen", (req: AuthedRequest,
   res.status(201).json({ ok: true, anzahlTage: geplant.length, konflikte });
 });
 
-// Plan veroeffentlichen: alle Entwuerfe im Zeitraum -> veroeffentlicht, Benachrichtigung an betroffene Mitarbeiter
+// Plan veroeffentlichen: alle Entwuerfe der Team-Mitglieder im Zeitraum -> veroeffentlicht,
+// Benachrichtigung an betroffene Mitarbeiter. Schichtarten sind global, daher wird ueber die
+// Mitgliedschaft dieser Planungseinheit gescopt statt ueber die (nicht mehr existierende)
+// Planungseinheit der Schichtart.
 plantafelRouter.post("/planungseinheiten/:id/veroeffentlichen", requirePlaner("id"), (req, res) => {
   const { von, bis } = req.body ?? {};
   if (!von || !bis) return res.status(400).json({ error: "von und bis erforderlich" });
+  const roster = `SELECT benutzer_id FROM mitgliedschaft WHERE planungseinheit_id = ? AND rolle IN ('mitarbeiter','planer')`;
   const betroffene = db
     .prepare(
       `SELECT DISTINCT sz.benutzer_id FROM schicht_zuweisung sz
-       JOIN schichtart sa ON sa.id = sz.schichtart_id
-       WHERE sa.planungseinheit_id = ? AND sz.datum BETWEEN ? AND ? AND sz.status = 'entwurf'`
+       WHERE sz.benutzer_id IN (${roster}) AND sz.datum BETWEEN ? AND ? AND sz.status = 'entwurf'`
     )
     .all(req.params.id, von, bis) as { benutzer_id: number }[];
 
   db.prepare(
     `UPDATE schicht_zuweisung SET status = 'veroeffentlicht'
-     WHERE id IN (
-       SELECT sz.id FROM schicht_zuweisung sz JOIN schichtart sa ON sa.id = sz.schichtart_id
-       WHERE sa.planungseinheit_id = ? AND sz.datum BETWEEN ? AND ? AND sz.status = 'entwurf'
-     )`
+     WHERE benutzer_id IN (${roster}) AND datum BETWEEN ? AND ? AND status = 'entwurf'`
   ).run(req.params.id, von, bis);
 
   for (const b of betroffene) {

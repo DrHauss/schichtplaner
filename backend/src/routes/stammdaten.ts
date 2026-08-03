@@ -129,12 +129,14 @@ stammdatenRouter.delete("/planungseinheiten/:id/mitglieder/:mitgliedschaftId", r
   res.json({ ok: true });
 });
 
-// Schichtarten
-stammdatenRouter.get("/planungseinheiten/:id/schichtarten", (req, res) => {
-  res.json(db.prepare("SELECT * FROM schichtart WHERE planungseinheit_id = ?").all(req.params.id));
+// Schichtarten gelten global fuer alle Planungseinheiten (siehe lib/db.ts) -- Verwaltung daher
+// ohne Planungseinheiten-Bezug in der URL; Planer-Berechtigung in irgendeiner Einheit genuegt.
+stammdatenRouter.get("/schichtarten", (_req, res) => {
+  res.json(db.prepare("SELECT * FROM schichtart").all());
 });
 
-stammdatenRouter.post("/planungseinheiten/:id/schichtarten", requirePlaner("id"), (req, res) => {
+stammdatenRouter.post("/schichtarten", (req: AuthedRequest, res) => {
+  if (!istIrgendeinPlaner(req)) return res.status(403).json({ error: "Keine Planer-Berechtigung" });
   const { kuerzel, bezeichnung, farbe, pauseMin, stundenwert, zuschlagsart, kategorie, ganztags } = req.body ?? {};
   // Ganztaegige Schichtarten (typischerweise Abwesenheiten) haben keine sinnvolle Uhrzeit --
   // beginn/ende werden serverseitig auf den Sentinel "00:00" erzwungen, unabhaengig vom Client.
@@ -149,11 +151,10 @@ stammdatenRouter.post("/planungseinheiten/:id/schichtarten", requirePlaner("id")
   }
   const info = db
     .prepare(
-      `INSERT INTO schichtart (planungseinheit_id, kuerzel, bezeichnung, farbe, beginn, ende, pause_min, stundenwert, zuschlagsart, kategorie, ganztags)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?)`
+      `INSERT INTO schichtart (kuerzel, bezeichnung, farbe, beginn, ende, pause_min, stundenwert, zuschlagsart, kategorie, ganztags)
+       VALUES (?,?,?,?,?,?,?,?,?,?)`
     )
     .run(
-      req.params.id,
       kuerzel,
       bezeichnung,
       farbe ?? "#3b82f6",
@@ -169,13 +170,9 @@ stammdatenRouter.post("/planungseinheiten/:id/schichtarten", requirePlaner("id")
 });
 
 stammdatenRouter.put("/schichtarten/:id", (req: AuthedRequest, res) => {
-  const schichtart = db.prepare("SELECT planungseinheit_id FROM schichtart WHERE id = ?").get(req.params.id) as
-    | { planungseinheit_id: number }
-    | undefined;
+  if (!istIrgendeinPlaner(req)) return res.status(403).json({ error: "Keine Planer-Berechtigung" });
+  const schichtart = db.prepare("SELECT id FROM schichtart WHERE id = ?").get(req.params.id);
   if (!schichtart) return res.status(404).json({ error: "Schichtart nicht gefunden" });
-  if (!istPlanerFuerPlanungseinheit(req, schichtart.planungseinheit_id)) {
-    return res.status(403).json({ error: "Keine Planer-Berechtigung fuer diese Planungseinheit" });
-  }
   const { kuerzel, bezeichnung, farbe, pauseMin, stundenwert, zuschlagsart, kategorie, ganztags } = req.body ?? {};
   const istGanztags = !!ganztags;
   const beginn = istGanztags ? "00:00" : req.body?.beginn;
@@ -207,13 +204,9 @@ stammdatenRouter.put("/schichtarten/:id", (req: AuthedRequest, res) => {
 // Archivieren/Reaktivieren: archivierte Schichtarten bleiben in bestehenden Zuweisungen und der
 // Planung sichtbar, koennen aber nicht mehr neu zugewiesen werden (siehe Sperre in plantafel.ts).
 stammdatenRouter.put("/schichtarten/:id/archivieren", (req: AuthedRequest, res) => {
-  const schichtart = db.prepare("SELECT planungseinheit_id FROM schichtart WHERE id = ?").get(req.params.id) as
-    | { planungseinheit_id: number }
-    | undefined;
+  if (!istIrgendeinPlaner(req)) return res.status(403).json({ error: "Keine Planer-Berechtigung" });
+  const schichtart = db.prepare("SELECT id FROM schichtart WHERE id = ?").get(req.params.id);
   if (!schichtart) return res.status(404).json({ error: "Schichtart nicht gefunden" });
-  if (!istPlanerFuerPlanungseinheit(req, schichtart.planungseinheit_id)) {
-    return res.status(403).json({ error: "Keine Planer-Berechtigung fuer diese Planungseinheit" });
-  }
   const { archiviert } = req.body ?? {};
   db.prepare("UPDATE schichtart SET archiviert = ? WHERE id = ?").run(archiviert ? 1 : 0, req.params.id);
   res.json({ ok: true });

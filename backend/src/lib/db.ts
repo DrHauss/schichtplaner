@@ -48,9 +48,11 @@ CREATE TABLE IF NOT EXISTS mitgliedschaft (
   UNIQUE(benutzer_id, planungseinheit_id, rolle)
 );
 
+-- Schichtarten sind global -- sie gelten fuer alle Planungseinheiten gleichermassen. Ein
+-- Mitarbeiter in mehreren Teams ist damit an einem Tag ueberall "belegt", sobald ihm irgendeine
+-- Planungseinheit eine Schicht zugewiesen hat (siehe routes/plantafel.ts, routes/uebersicht.ts).
 CREATE TABLE IF NOT EXISTS schichtart (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
-  planungseinheit_id INTEGER NOT NULL REFERENCES planungseinheit(id) ON DELETE CASCADE,
   kuerzel TEXT NOT NULL,
   bezeichnung TEXT NOT NULL,
   farbe TEXT DEFAULT '#3b82f6',
@@ -313,3 +315,36 @@ ensureColumn("benutzer", "soll_stunden_taeglich", "REAL");
 // koennen aber nicht mehr neu zugewiesen werden (weder einzeln noch ueber eine Vorlage, die sie
 // enthaelt) -- siehe Sperre in routes/plantafel.ts.
 ensureColumn("schichtart", "archiviert", "INTEGER NOT NULL DEFAULT 0");
+
+// Migration: Schichtarten waren frueher je Planungseinheit definiert, gelten aber jetzt global.
+// SQLite kann eine NOT NULL-Spalte nicht per ALTER TABLE entfernen -- daher Tabellen-Neubau statt
+// ensureColumn. Bestehende Zeilen (samt id) bleiben erhalten, damit alle Fremdschluessel
+// (schicht_zuweisung, schichtblock_vorlage_eintrag, besetzungsbedarf) weiterhin gueltig sind;
+// zuvor pro Team angelegte, gleichnamige Schichtarten werden dabei NICHT automatisch
+// zusammengefuehrt -- das erfordert eine bewusste Entscheidung, welche Zeile "gewinnt".
+(function migriereSchichtartGlobal() {
+  const spalten = db.prepare("PRAGMA table_info(schichtart)").all() as { name: string }[];
+  if (!spalten.some((s) => s.name === "planungseinheit_id")) return;
+  db.pragma("foreign_keys = OFF");
+  db.exec(`
+    CREATE TABLE schichtart_neu (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      kuerzel TEXT NOT NULL,
+      bezeichnung TEXT NOT NULL,
+      farbe TEXT DEFAULT '#3b82f6',
+      beginn TEXT NOT NULL,
+      ende TEXT NOT NULL,
+      pause_min INTEGER DEFAULT 0,
+      stundenwert REAL,
+      zuschlagsart TEXT,
+      kategorie TEXT NOT NULL DEFAULT 'dienst',
+      ganztags INTEGER NOT NULL DEFAULT 0,
+      archiviert INTEGER NOT NULL DEFAULT 0
+    );
+    INSERT INTO schichtart_neu (id, kuerzel, bezeichnung, farbe, beginn, ende, pause_min, stundenwert, zuschlagsart, kategorie, ganztags, archiviert)
+      SELECT id, kuerzel, bezeichnung, farbe, beginn, ende, pause_min, stundenwert, zuschlagsart, kategorie, ganztags, archiviert FROM schichtart;
+    DROP TABLE schichtart;
+    ALTER TABLE schichtart_neu RENAME TO schichtart;
+  `);
+  db.pragma("foreign_keys = ON");
+})();
