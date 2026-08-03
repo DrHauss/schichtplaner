@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import { api } from "../api/client";
-import { formatDatum } from "../lib/datum";
 
 interface Zuweisung {
   id: number;
@@ -22,49 +21,93 @@ interface PlanungseinheitUebersicht {
   zuweisungen: Zuweisung[];
 }
 
-function montagDieserWoche() {
-  const d = new Date();
-  const tag = (d.getDay() + 6) % 7;
-  d.setDate(d.getDate() - tag);
-  return d;
+interface FeiertagEintrag {
+  datum: string;
+  bezeichnung: string;
+  istFrei: boolean;
 }
 
-function wochenTage(startMontag: Date) {
-  return Array.from({ length: 7 }, (_, i) => {
-    const d = new Date(startMontag);
-    d.setDate(d.getDate() + i);
-    return d.toISOString().slice(0, 10);
+const WOCHENTAGE_KURZ = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
+
+function heuteJahrMonat() {
+  const d = new Date();
+  return { jahr: d.getFullYear(), monat: d.getMonth() + 1 };
+}
+
+function tageDesMonats(jahr: number, monat: number): string[] {
+  const letzterTag = new Date(jahr, monat, 0).getDate();
+  return Array.from({ length: letzterTag }, (_, i) => {
+    const tag = i + 1;
+    return `${jahr}-${String(monat).padStart(2, "0")}-${String(tag).padStart(2, "0")}`;
   });
+}
+
+function wochentagKurz(datumIso: string): string {
+  const d = new Date(`${datumIso}T00:00:00`);
+  return WOCHENTAGE_KURZ[(d.getDay() + 6) % 7];
+}
+
+function istWochenende(datumIso: string): boolean {
+  const d = new Date(`${datumIso}T00:00:00`);
+  const tag = d.getDay();
+  return tag === 0 || tag === 6;
 }
 
 // Teamuebergreifende, rein lesende Uebersicht der veroeffentlichten Schichten aller
 // Planungseinheiten -- fuer alle angemeldeten Nutzer sichtbar, nicht nur fuer Planer oder
 // Mitglieder der jeweiligen Einheit. Entwuerfe bleiben bewusst nur in der Plantafel der
-// jeweiligen Planer sichtbar.
+// jeweiligen Planer sichtbar. Monatsweise Ansicht, da ein Wochenraster fuer den
+// Gesamtueberblick ueber ein Team zu kleinteilig ist.
 export default function TeamUebersichtPage() {
-  const [woche, setWoche] = useState(montagDieserWoche());
+  const [{ jahr, monat }, setMonat] = useState(heuteJahrMonat());
   const [einheiten, setEinheiten] = useState<PlanungseinheitUebersicht[]>([]);
+  const [feiertage, setFeiertage] = useState<FeiertagEintrag[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const tage = useMemo(() => wochenTage(woche), [woche]);
+  const tage = useMemo(() => tageDesMonats(jahr, monat), [jahr, monat]);
+  const feiertagNachDatum = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const f of feiertage) if (f.istFrei) map.set(f.datum, f.bezeichnung);
+    return map;
+  }, [feiertage]);
 
   useEffect(() => {
     setLoading(true);
-    api<{ planungseinheiten: PlanungseinheitUebersicht[] }>(`/uebersicht?von=${tage[0]}&bis=${tage[6]}`)
-      .then((d) => setEinheiten(d.planungseinheiten))
+    Promise.all([
+      api<{ planungseinheiten: PlanungseinheitUebersicht[] }>(`/uebersicht?von=${tage[0]}&bis=${tage[tage.length - 1]}`),
+      api<FeiertagEintrag[]>(`/feiertage?jahr=${jahr}`),
+    ])
+      .then(([uebersicht, f]) => {
+        setEinheiten(uebersicht.planungseinheiten);
+        setFeiertage(f);
+      })
       .finally(() => setLoading(false));
-  }, [tage[0], tage[6]]);
+  }, [tage, jahr]);
+
+  function monatWechseln(delta: number) {
+    setMonat(({ jahr, monat }) => {
+      const d = new Date(jahr, monat - 1 + delta, 1);
+      return { jahr: d.getFullYear(), monat: d.getMonth() + 1 };
+    });
+  }
+
+  function tagKlasse(t: string): string {
+    const klassen: string[] = [];
+    if (istWochenende(t)) klassen.push("wochenende");
+    if (feiertagNachDatum.has(t)) klassen.push("feiertag");
+    return klassen.join(" ");
+  }
+
+  const monatLabel = new Date(jahr, monat - 1, 1).toLocaleDateString("de-DE", { month: "long", year: "numeric" });
 
   return (
     <div className="page">
       <h1>Team-Übersicht</h1>
       <p className="hint">Veröffentlichte Schichten aller Teams -- eigene Entwürfe eines Teams sind hier bewusst nicht sichtbar.</p>
       <div className="toolbar">
-        <button onClick={() => setWoche((w) => new Date(w.getTime() - 7 * 86400000))}>← Vorwoche</button>
-        <span>
-          {formatDatum(tage[0])} – {formatDatum(tage[6])}
-        </span>
-        <button onClick={() => setWoche((w) => new Date(w.getTime() + 7 * 86400000))}>Nächste Woche →</button>
+        <button onClick={() => monatWechseln(-1)}>← Vormonat</button>
+        <span style={{ minWidth: "10rem", textAlign: "center" }}>{monatLabel}</span>
+        <button onClick={() => monatWechseln(1)}>Nächster Monat →</button>
       </div>
 
       {loading && <div className="center-info">Lade…</div>}
@@ -80,39 +123,51 @@ export default function TeamUebersichtPage() {
               {pe.mitarbeiter.length === 0 ? (
                 <p className="empty">Keine Mitarbeiter in diesem Team.</p>
               ) : (
-                <table className="table plantafel">
-                  <thead>
-                    <tr>
-                      <th>Mitarbeiter</th>
-                      {tage.map((t) => (
-                        <th key={t}>{formatDatum(t).slice(0, 5)}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {pe.mitarbeiter.map((m) => (
-                      <tr key={m.id}>
-                        <td>{m.name}</td>
-                        {tage.map((t) => {
-                          const treffer = pe.zuweisungen.filter((z) => z.benutzerId === m.id && z.datum === t);
-                          return (
-                            <td key={t}>
-                              {treffer.length > 0 ? (
-                                treffer.map((z) => (
-                                  <span key={z.id} className="badge" style={{ background: z.farbe }} title={`${z.bezeichnung} (${z.beginn}–${z.ende})`}>
-                                    {z.kuerzel}
-                                  </span>
-                                ))
-                              ) : (
-                                <span className="freischicht-hinweis">Freischicht</span>
-                              )}
-                            </td>
-                          );
-                        })}
+                <div className="uebersicht-monat-scroll">
+                  <table className="table uebersicht-monat">
+                    <thead>
+                      <tr>
+                        <th>Mitarbeiter</th>
+                        {tage.map((t) => (
+                          <th key={t} className={tagKlasse(t)} title={feiertagNachDatum.get(t)}>
+                            <div className="tag-nr">{Number(t.slice(8, 10))}</div>
+                            <div className="tag-wt">{wochentagKurz(t)}</div>
+                          </th>
+                        ))}
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {pe.mitarbeiter.map((m) => (
+                        <tr key={m.id}>
+                          <td>{m.name}</td>
+                          {tage.map((t) => {
+                            const treffer = pe.zuweisungen.filter((z) => z.benutzerId === m.id && z.datum === t);
+                            return (
+                              <td key={t} className={tagKlasse(t)}>
+                                {treffer.length > 0 ? (
+                                  treffer.map((z) => (
+                                    <span
+                                      key={z.id}
+                                      className="badge"
+                                      style={{ background: z.farbe }}
+                                      title={`${z.bezeichnung} (${z.beginn}–${z.ende})`}
+                                    >
+                                      {z.kuerzel}
+                                    </span>
+                                  ))
+                                ) : (
+                                  <span className="freischicht-hinweis" title="Freischicht">
+                                    frei
+                                  </span>
+                                )}
+                              </td>
+                            );
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               )}
             </section>
           );
