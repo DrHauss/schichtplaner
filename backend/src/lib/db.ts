@@ -251,6 +251,21 @@ CREATE TABLE IF NOT EXISTS feiertag (
   quelle      TEXT NOT NULL DEFAULT 'generiert',
   UNIQUE(jahr, bezeichnung)
 );
+
+-- Kommentare an Freischichten (Tage ohne Zuweisung): eigene Tabelle statt Erweiterung von
+-- schicht_kommentar, da dessen zuweisung_id NOT NULL ist und eine Freischicht per Definition
+-- keine Zuweisung hat. Adresse ist daher (benutzer_id, datum, planungseinheit_id) statt einer
+-- zuweisung_id. Gleiche Sichtbarkeits-/Berechtigungslogik wie bei schicht_kommentar.
+CREATE TABLE IF NOT EXISTS freischicht_kommentar (
+  id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+  planungseinheit_id INTEGER NOT NULL REFERENCES planungseinheit(id) ON DELETE CASCADE,
+  benutzer_id        INTEGER NOT NULL REFERENCES benutzer(id) ON DELETE CASCADE,
+  datum              TEXT NOT NULL,
+  autor_id           INTEGER NOT NULL REFERENCES benutzer(id) ON DELETE CASCADE,
+  text               TEXT NOT NULL,
+  sichtbarkeit       TEXT NOT NULL DEFAULT 'nur_planer' CHECK (sichtbarkeit IN ('oeffentlich','nur_planer')),
+  erstellt_am        TEXT DEFAULT CURRENT_TIMESTAMP
+);
 `);
 
 // SQLite erlaubt bei ALTER TABLE ... ADD COLUMN weder UNIQUE- noch PRIMARY-KEY-Constraints;
@@ -293,3 +308,8 @@ ensureColumn("schichtart", "ganztags", "INTEGER NOT NULL DEFAULT 0");
 // Taegliche Sollarbeitszeit je Mitarbeiter -- Grundlage fuer die Berechnung der
 // Jahresarbeitszeit ueber die Arbeitstage des Jahres (siehe lib/feiertage.ts).
 ensureColumn("benutzer", "soll_stunden_taeglich", "REAL");
+
+// Archivierte Schichtarten bleiben in bestehenden Zuweisungen/der Planung sichtbar (Historie),
+// koennen aber nicht mehr neu zugewiesen werden (weder einzeln noch ueber eine Vorlage, die sie
+// enthaelt) -- siehe Sperre in routes/plantafel.ts.
+ensureColumn("schichtart", "archiviert", "INTEGER NOT NULL DEFAULT 0");

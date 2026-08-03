@@ -62,6 +62,33 @@ uebersichtRouter.get("/", (req: AuthedRequest, res) => {
     });
   }
 
+  // Kommentare an Freischichten (Tagen ohne Zuweisung) im Zeitraum, gleiche Sichtbarkeitsregel
+  // wie bei Kommentaren an echten Zuweisungen.
+  const freischichtZeilen = db
+    .prepare(
+      `SELECT fk.id, fk.planungseinheit_id AS pe_id, fk.benutzer_id, fk.datum, b.name AS autor_name,
+              fk.text, fk.sichtbarkeit, fk.erstellt_am
+       FROM freischicht_kommentar fk JOIN benutzer b ON b.id = fk.autor_id
+       WHERE fk.datum BETWEEN ? AND ?
+       ORDER BY fk.erstellt_am`
+    )
+    .all(von, bis) as any[];
+
+  const freischichtNachPe = new Map<number, any[]>();
+  for (const k of freischichtZeilen) {
+    if (k.sichtbarkeit !== "oeffentlich" && !req.user!.istAdmin && !planerPeIds.has(k.pe_id)) continue;
+    if (!freischichtNachPe.has(k.pe_id)) freischichtNachPe.set(k.pe_id, []);
+    freischichtNachPe.get(k.pe_id)!.push({
+      id: k.id,
+      benutzerId: k.benutzer_id,
+      datum: k.datum,
+      autorName: k.autor_name,
+      text: k.text,
+      sichtbarkeit: k.sichtbarkeit,
+      erstelltAm: k.erstellt_am,
+    });
+  }
+
   const zuweisungenNachPe = new Map<number, any[]>();
   for (const z of zeilen) {
     if (!zuweisungenNachPe.has(z.pe_id)) zuweisungenNachPe.set(z.pe_id, []);
@@ -101,6 +128,7 @@ uebersichtRouter.get("/", (req: AuthedRequest, res) => {
         )
         .all(p.id),
       zuweisungen: zuweisungenNachPe.get(p.id) ?? [],
+      freischichtKommentare: freischichtNachPe.get(p.id) ?? [],
     })),
   });
 });

@@ -204,6 +204,21 @@ stammdatenRouter.put("/schichtarten/:id", (req: AuthedRequest, res) => {
   res.json({ ok: true });
 });
 
+// Archivieren/Reaktivieren: archivierte Schichtarten bleiben in bestehenden Zuweisungen und der
+// Planung sichtbar, koennen aber nicht mehr neu zugewiesen werden (siehe Sperre in plantafel.ts).
+stammdatenRouter.put("/schichtarten/:id/archivieren", (req: AuthedRequest, res) => {
+  const schichtart = db.prepare("SELECT planungseinheit_id FROM schichtart WHERE id = ?").get(req.params.id) as
+    | { planungseinheit_id: number }
+    | undefined;
+  if (!schichtart) return res.status(404).json({ error: "Schichtart nicht gefunden" });
+  if (!istPlanerFuerPlanungseinheit(req, schichtart.planungseinheit_id)) {
+    return res.status(403).json({ error: "Keine Planer-Berechtigung fuer diese Planungseinheit" });
+  }
+  const { archiviert } = req.body ?? {};
+  db.prepare("UPDATE schichtart SET archiviert = ? WHERE id = ?").run(archiviert ? 1 : 0, req.params.id);
+  res.json({ ok: true });
+});
+
 // Schichtblock-Vorlagen: wiederverwendbare Muster (z. B. "Wochenende Fruehschicht", "Nachtschicht
 // 3er Block") fuer die direkte Top-down-Zuweisung in der Plantafel (siehe routes/plantafel.ts).
 stammdatenRouter.get("/planungseinheiten/:id/schichtblock-vorlagen", (req, res) => {
@@ -213,12 +228,12 @@ stammdatenRouter.get("/planungseinheiten/:id/schichtblock-vorlagen", (req, res) 
   const mitEintraegen = vorlagen.map((v) => {
     const eintraege = db
       .prepare(
-        `SELECT e.id, e.tag_offset, e.schichtart_id, sa.kuerzel, sa.bezeichnung as schichtart_bezeichnung
+        `SELECT e.id, e.tag_offset, e.schichtart_id, sa.kuerzel, sa.bezeichnung as schichtart_bezeichnung, sa.archiviert
          FROM schichtblock_vorlage_eintrag e JOIN schichtart sa ON sa.id = e.schichtart_id
          WHERE e.vorlage_id = ? ORDER BY e.tag_offset`
       )
-      .all(v.id);
-    return { ...v, eintraege };
+      .all(v.id) as { archiviert: number }[];
+    return { ...v, eintraege, enthaeltArchivierte: eintraege.some((e) => e.archiviert) };
   });
   res.json(mitEintraegen);
 });
