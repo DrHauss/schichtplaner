@@ -907,16 +907,18 @@ export default function PlantafelPage() {
               <tbody>
                 {sichtbareBesetzungsregeln.map((r) => (
                   <tr key={r.id}>
-                    <td title={r.planungseinheiten.map((p) => p.name).join(", ")}>
-                      <span className="badge" style={{ background: r.farbe, color: kontrastfarbe(r.farbe) }}>
-                        {r.kuerzel}
-                      </span>{" "}
-                      {r.bezeichnung}
+                    <td title={`${r.bezeichnung} – ${r.planungseinheiten.map((p) => p.name).join(", ")}`}>
+                      <span className="zelle-erste-spalte">
+                        <span className="badge" style={{ background: r.farbe, color: kontrastfarbe(r.farbe) }}>
+                          {r.kuerzel}
+                        </span>{" "}
+                        {r.bezeichnung}
+                      </span>
                     </td>
                     {tage.map((t) => {
                       const soll = r.ziele[wochentagZielSchluessel(t)];
                       const ist = r.istProTag[t] ?? 0;
-                      const klassen = ["plan-zelle"];
+                      const klassen = ["plan-zelle", istWochenende(t) ? "wochenende" : "", feiertage.has(t) ? "feiertag" : ""].filter(Boolean);
                       if (ist < soll) klassen.push("besetzung-unter");
                       else if (ist > soll && r.warntBeiUeberbesetzung) klassen.push("besetzung-ueber");
                       return (
@@ -977,7 +979,9 @@ export default function PlantafelPage() {
                   <tbody>
                     {daten.mitarbeiter.map((m) => (
                       <tr key={m.id}>
-                        <td>{m.name}</td>
+                        <td title={m.name}>
+                          <span className="zelle-erste-spalte">{m.name}</span>
+                        </td>
                         {tage.map((t) => {
                           // alleTreffer/alleBereitschaften sind die tatsaechlichen Daten der Zelle,
                           // unabhaengig vom Anzeige-Filter -- der Filter blendet nur aus, was

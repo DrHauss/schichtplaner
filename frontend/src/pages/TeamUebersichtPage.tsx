@@ -471,11 +471,13 @@ export default function TeamUebersichtPage() {
               <tbody>
                 {bereitschaftsartenListe.map((ba) => (
                   <tr key={ba.id}>
-                    <td>
-                      <span className="badge" style={{ background: ba.farbe, color: kontrastfarbe(ba.farbe) }}>
-                        &nbsp;
-                      </span>{" "}
-                      {ba.bezeichnung}
+                    <td title={ba.bezeichnung}>
+                      <span className="zelle-erste-spalte">
+                        <span className="badge" style={{ background: ba.farbe, color: kontrastfarbe(ba.farbe) }}>
+                          &nbsp;
+                        </span>{" "}
+                        {ba.bezeichnung}
+                      </span>
                     </td>
                     {tage.map((t) => {
                       const namen = bereitschaften.filter((b) => b.bereitschaftsartId === ba.id && b.datum === t).map((b) => b.mitarbeiterName);
@@ -537,7 +539,9 @@ export default function TeamUebersichtPage() {
                     <tbody>
                       {pe.mitarbeiter.map((m) => (
                         <tr key={m.id}>
-                          <td>{m.name}</td>
+                          <td title={m.name}>
+                            <span className="zelle-erste-spalte">{m.name}</span>
+                          </td>
                           {tage.map((t) => {
                             const treffer = pe.zuweisungen.filter((z) => z.benutzerId === m.id && z.datum === t);
 
