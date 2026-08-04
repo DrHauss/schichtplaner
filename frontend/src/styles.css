@@ -144,8 +144,21 @@ body {
    Tabelle zu unterschiedlichen, "springenden" Spaltenbreiten fuehrt (gleiches Prinzip wie bei
    .uebersicht-monat in der Team-Uebersicht). */
 .plantafel { table-layout: fixed; width: auto; }
-.plantafel th, .plantafel td { text-align: center; width: 3.4rem; }
-.plantafel th:first-child, .plantafel td:first-child { text-align: left; width: 9rem; }
+.plantafel th, .plantafel td { text-align: center; width: 3.4rem; max-width: 3.4rem; }
+.plantafel th:first-child, .plantafel td:first-child { text-align: left; width: 9rem; max-width: 9rem; }
+/* overflow/text-overflow direkt auf einer table-cell-Box (th/td) truncaten Chromium & Co. bei
+   einem sehr langen, nicht trennbaren Wort (z. B. ein zusammengesetzter Name ohne Leerzeichen)
+   NICHT zuverlaessig -- die Spalte waechst trotz table-layout: fixed und "blutet" optisch in die
+   naechsten Zellen. Truncation auf einer verschachtelten Block-Box (hier: dieser Span) funktioniert
+   dagegen zuverlaessig und haelt die Spalte garantiert bei 9rem; der volle Name steht weiterhin im
+   title-Tooltip der Zelle. */
+.plantafel .zelle-erste-spalte {
+  display: block;
+  max-width: 9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .plantafel .tag-nr { font-weight: 600; line-height: 1.1; }
 .plantafel .tag-wt { font-weight: 400; color: var(--mitel-grau); font-size: 0.75rem; line-height: 1.1; }
 .plantafel th.wochenende, .plantafel td.wochenende { background: var(--mitel-grau-10); }
@@ -334,6 +347,19 @@ body {
   background: white;
   z-index: 1;
   width: 9rem;
+  max-width: 9rem;
+}
+/* overflow/text-overflow direkt auf th/td (siehe oben) truncaten einen sehr langen, nicht
+   trennbaren Namen nicht zuverlaessig -- die Spalte waechst trotz table-layout: fixed und
+   verschiebt die Tabelle gegenueber den anderen (Bereitschaften-Block, andere Teams). Truncation
+   auf dieser verschachtelten Block-Box haelt die Spalte zuverlaessig bei 9rem (siehe .plantafel
+   .zelle-erste-spalte fuer dieselbe Loesung in der Plantafel). */
+.uebersicht-monat .zelle-erste-spalte {
+  display: block;
+  max-width: 9rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 /* Kuerzel koennen bis zu 4 Zeichen lang sein (z. B. "F-WE", "MAGZ") -- die Badges selbst muessen
    innerhalb der festen Spaltenbreite trunkieren, sonst wuerden sie beim Ueberlaufen der Zelle
