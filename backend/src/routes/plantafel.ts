@@ -46,7 +46,6 @@ plantafelRouter.get("/planungseinheiten/:id/plantafel", (req: AuthedRequest, res
           .all(...mitarbeiterIds, von, bis);
 
   const schichtarten = db.prepare("SELECT * FROM schichtart").all();
-  const bedarf = db.prepare("SELECT * FROM besetzungsbedarf").all();
 
   // Bereitschaften sind keine Schichten -- eigene, roster-gescopte Liste analog zuweisungen.
   const bereitschaften =
@@ -89,7 +88,65 @@ plantafelRouter.get("/planungseinheiten/:id/plantafel", (req: AuthedRequest, res
       .all(req.params.id, von, bis) as { sichtbarkeit: string }[]
   ).filter((k) => istPlaner || k.sichtbarkeit === "oeffentlich");
 
-  res.json({ mitarbeiter, zuweisungen, schichtarten, bedarf, kommentare, freischichtKommentare, bereitschaften, bereitschaftsarten });
+  res.json({ mitarbeiter, zuweisungen, schichtarten, kommentare, freischichtKommentare, bereitschaften, bereitschaftsarten });
+});
+
+const WOCHENTAG_FELDER_STATUS = ["mo", "di", "mi", "do", "fr", "sa", "so"] as const;
+
+// Mindestbesetzung: Ist-Anzahl je Regel und Tag im Zeitraum, gezaehlt ueber die Mitarbeiter ALLER
+// mit der Regel verknuepften Planungseinheiten gemeinsam (ein Mitarbeiter in mehreren dieser Teams
+// wird dabei nicht doppelt gezaehlt). Ohne Team-Einschraenkung, da eine Regel per Definition
+// mehrere Teams zusammenfassen kann -- die Sichtbarkeit auf die eigenen Teams filtert das Frontend.
+plantafelRouter.get("/besetzungsregeln/status", (req, res) => {
+  const { von, bis } = req.query as { von?: string; bis?: string };
+  if (!von || !bis) return res.status(400).json({ error: "von und bis erforderlich" });
+
+  const regeln = db
+    .prepare(
+      `SELECT r.*, sa.kuerzel, sa.bezeichnung AS schichtart_bezeichnung, sa.farbe
+       FROM besetzungsregel r JOIN schichtart sa ON sa.id = r.schichtart_id
+       ORDER BY sa.bezeichnung`
+    )
+    .all() as any[];
+
+  const peStmt = db.prepare(
+    `SELECT p.id, p.name FROM besetzungsregel_planungseinheit rp JOIN planungseinheit p ON p.id = rp.planungseinheit_id
+     WHERE rp.besetzungsregel_id = ? ORDER BY p.name`
+  );
+  const mitarbeiterStmt = db.prepare(`SELECT benutzer_id FROM mitgliedschaft WHERE planungseinheit_id = ? AND rolle = 'mitarbeiter'`);
+
+  const ergebnis = regeln.map((r) => {
+    const planungseinheiten = peStmt.all(r.id) as { id: number; name: string }[];
+    const mitarbeiterIds = Array.from(
+      new Set(planungseinheiten.flatMap((pe) => (mitarbeiterStmt.all(pe.id) as { benutzer_id: number }[]).map((m) => m.benutzer_id)))
+    );
+    const istProTag: Record<string, number> = {};
+    if (mitarbeiterIds.length > 0) {
+      const rows = db
+        .prepare(
+          `SELECT datum, COUNT(*) AS anzahl FROM schicht_zuweisung
+           WHERE schichtart_id = ? AND datum BETWEEN ? AND ? AND benutzer_id IN (${mitarbeiterIds.map(() => "?").join(",")})
+           GROUP BY datum`
+        )
+        .all(r.schichtart_id, von, bis, ...mitarbeiterIds) as { datum: string; anzahl: number }[];
+      for (const row of rows) istProTag[row.datum] = row.anzahl;
+    }
+    const ziele: Record<string, number> = {};
+    WOCHENTAG_FELDER_STATUS.forEach((f) => (ziele[f] = r[`ziel_${f}`]));
+    return {
+      id: r.id,
+      schichtartId: r.schichtart_id,
+      kuerzel: r.kuerzel,
+      bezeichnung: r.schichtart_bezeichnung,
+      farbe: r.farbe,
+      warntBeiUeberbesetzung: !!r.warnt_bei_ueberbesetzung,
+      ziele,
+      planungseinheiten,
+      istProTag,
+    };
+  });
+
+  res.json(ergebnis);
 });
 
 // Schicht zuweisen (mit Konfliktpruefung)

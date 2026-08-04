@@ -88,12 +88,29 @@ CREATE TABLE IF NOT EXISTS bereitschaft_zuweisung (
   UNIQUE(benutzer_id, bereitschaftsart_id, datum)
 );
 
-CREATE TABLE IF NOT EXISTS besetzungsbedarf (
+-- Mindestbesetzung: Soll-Anzahl einer Schichtart, getrennt je Wochentag (Wochenenden werden oft
+-- anders besetzt als Werktage). Eine Regel wertet die Ist-Anzahl ueber eine oder mehrere
+-- Planungseinheiten hinweg gemeinsam aus (siehe besetzungsregel_planungseinheit), nicht je Team
+-- getrennt -- ein Team kann sich so mit einem anderen die Mindestbesetzung teilen.
+-- warnt_bei_ueberbesetzung ist optional: neben der Unterbesetzung (die immer auffaellt) kann eine
+-- Regel zusaetzlich auch dann auffallen, wenn mehr als die Zielgroesse vergeben wurde.
+CREATE TABLE IF NOT EXISTS besetzungsregel (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   schichtart_id INTEGER NOT NULL REFERENCES schichtart(id) ON DELETE CASCADE,
-  wochentag INTEGER NOT NULL, -- 0=Mo .. 6=So
-  soll_anzahl INTEGER NOT NULL DEFAULT 1,
-  qualifikation_id INTEGER REFERENCES qualifikation(id)
+  warnt_bei_ueberbesetzung INTEGER NOT NULL DEFAULT 0,
+  ziel_mo INTEGER NOT NULL DEFAULT 1,
+  ziel_di INTEGER NOT NULL DEFAULT 1,
+  ziel_mi INTEGER NOT NULL DEFAULT 1,
+  ziel_do INTEGER NOT NULL DEFAULT 1,
+  ziel_fr INTEGER NOT NULL DEFAULT 1,
+  ziel_sa INTEGER NOT NULL DEFAULT 1,
+  ziel_so INTEGER NOT NULL DEFAULT 1
+);
+
+CREATE TABLE IF NOT EXISTS besetzungsregel_planungseinheit (
+  besetzungsregel_id INTEGER NOT NULL REFERENCES besetzungsregel(id) ON DELETE CASCADE,
+  planungseinheit_id INTEGER NOT NULL REFERENCES planungseinheit(id) ON DELETE CASCADE,
+  PRIMARY KEY (besetzungsregel_id, planungseinheit_id)
 );
 
 CREATE TABLE IF NOT EXISTS abwesenheit (

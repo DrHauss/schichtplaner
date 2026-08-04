@@ -149,6 +149,11 @@ body {
    alle Monatstabellen mit Tagen als Spalten (Plantafel und Team-Uebersicht). */
 .kw-zeile th { background: var(--mitel-grau-10); border-bottom: 1px solid var(--mitel-grau-20); }
 .kw-spalte { font-size: 0.7rem; font-weight: 600; color: var(--mitel-grau); text-align: center; }
+
+/* Mindestbesetzung-Uebersicht: Ist/Soll je Tag -- Unterbesetzung faellt immer farblich auf,
+   Ueberbesetzung nur, wenn die Regel das ausdruecklich verlangt (warnt_bei_ueberbesetzung). */
+.besetzung-unter { background: #fee2e2 !important; color: #b91c1c; font-weight: 600; }
+.besetzung-ueber { background: #ffedd5 !important; color: #9a3412; font-weight: 600; }
 .plantafel.stempel-aktiv .plan-zelle { cursor: crosshair; }
 .plantafel.stempel-aktiv .plan-zelle:hover { outline: 2px solid var(--mitel-mittelblau); outline-offset: -2px; }
 .plantafel.ziehen-aktiv { user-select: none; }
