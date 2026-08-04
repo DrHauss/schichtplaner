@@ -12,15 +12,6 @@ function upsertUser(email: string, name: string, passwort: string, istAdmin = fa
 
 const adminId = upsertUser("admin@schichtweb.de", "System-Administrator", "admin123", true);
 const planerId = upsertUser("planer@schichtweb.de", "Petra Planer", "planer123");
-const mitarbeiter1 = upsertUser("anna@schichtweb.de", "Anna Beispiel", "test1234");
-const mitarbeiter2 = upsertUser("ben@schichtweb.de", "Ben Muster", "test1234");
-const mitarbeiter3 = upsertUser("clara@schichtweb.de", "Clara Test", "test1234");
-
-// Taegliche Sollarbeitszeit: Anna und Ben Vollzeit, Clara Teilzeit -- Grundlage der
-// Jahresarbeitszeit-Berechnung (Konzept: Sollarbeitszeit x Arbeitstage des Jahres in NRW).
-db.prepare("UPDATE benutzer SET soll_stunden_taeglich = ? WHERE id = ? AND soll_stunden_taeglich IS NULL").run(8, mitarbeiter1);
-db.prepare("UPDATE benutzer SET soll_stunden_taeglich = ? WHERE id = ? AND soll_stunden_taeglich IS NULL").run(8, mitarbeiter2);
-db.prepare("UPDATE benutzer SET soll_stunden_taeglich = ? WHERE id = ? AND soll_stunden_taeglich IS NULL").run(6, mitarbeiter3);
 
 function upsertPlanungseinheit(name: string, standort: string) {
   const existing = db.prepare("SELECT id FROM planungseinheit WHERE name = ?").get(name) as { id: number } | undefined;
@@ -30,19 +21,67 @@ function upsertPlanungseinheit(name: string, standort: string) {
 }
 
 const peId = upsertPlanungseinheit("Pflegeteam Station 1", "Hauptstandort");
-// Zweites Team, um Mitarbeiter in mehreren Teams demonstrieren zu koennen: Anna ist Mitglied
-// beider Teams, ihre Schicht (Schichtarten sind global) gilt damit fuer beide gleichermassen.
-const peId2 = upsertPlanungseinheit("Pflegeteam Station 2", "Hauptstandort");
+// Zweites Team, um Mitarbeiter in mehreren Teams und teamuebergreifende Szenarien (globale
+// Bereitschaften, teamlose Schichtboerse, Plantafel-Mehrfachansicht) mit einer realistischen
+// Nutzerzahl demonstrieren zu koennen.
+const peId2 = upsertPlanungseinheit("Pflegeteam Station 2", "Nebenstandort");
 
 const insertMitgliedschaft = db.prepare(
   "INSERT OR IGNORE INTO mitgliedschaft (benutzer_id, planungseinheit_id, rolle) VALUES (?,?,?)"
 );
 insertMitgliedschaft.run(planerId, peId, "planer");
 insertMitgliedschaft.run(planerId, peId2, "planer");
-insertMitgliedschaft.run(mitarbeiter1, peId, "mitarbeiter");
-insertMitgliedschaft.run(mitarbeiter1, peId2, "mitarbeiter");
-insertMitgliedschaft.run(mitarbeiter2, peId, "mitarbeiter");
-insertMitgliedschaft.run(mitarbeiter3, peId, "mitarbeiter");
+
+// 20 Testmitarbeiter insgesamt: 15 in Team 1, 5 ausschliesslich in Team 2 -- die "Beispiel"-,
+// "Muster"-, "Test"-, "Fiktiv"- und "Demo"-Nachnamen kennzeichnen sie klar als Testdaten.
+const vornamen = [
+  "Anna",
+  "Ben",
+  "Clara",
+  "David",
+  "Emma",
+  "Felix",
+  "Greta",
+  "Hannah",
+  "Ivo",
+  "Jana",
+  "Kevin",
+  "Laura",
+  "Max",
+  "Nina",
+  "Oskar",
+  "Paul",
+  "Quentin",
+  "Rosa",
+  "Sina",
+  "Tom",
+];
+const nachnamen = ["Beispiel", "Muster", "Test", "Fiktiv", "Demo"];
+
+const mitarbeiterIds = vornamen.map((vorname, i) =>
+  upsertUser(`${vorname.toLowerCase()}@schichtweb.de`, `${vorname} ${nachnamen[i % nachnamen.length]}`, "test1234")
+);
+
+// Taegliche Sollarbeitszeit: ueberwiegend Vollzeit, jede fuenfte Testperson Teilzeit zur
+// Abwechslung -- Grundlage der Jahresarbeitszeit-Berechnung (Sollarbeitszeit x Arbeitstage
+// des Jahres in NRW).
+mitarbeiterIds.forEach((id, i) => {
+  const sollStunden = i % 5 === 2 ? 6 : 8;
+  db.prepare("UPDATE benutzer SET soll_stunden_taeglich = ? WHERE id = ? AND soll_stunden_taeglich IS NULL").run(sollStunden, id);
+});
+
+// Bis auf die letzten 5 (ausschliesslich Team 2) sind alle Testmitarbeiter Team 1 zugewiesen.
+const TEAM2_EXKLUSIV_ANZAHL = 5;
+mitarbeiterIds.forEach((id, i) => {
+  if (i < mitarbeiterIds.length - TEAM2_EXKLUSIV_ANZAHL) {
+    insertMitgliedschaft.run(id, peId, "mitarbeiter");
+  } else {
+    insertMitgliedschaft.run(id, peId2, "mitarbeiter");
+  }
+});
+// Anna (erste Testmitarbeiterin) ist zusaetzlich Mitglied von Team 2, um zu zeigen, dass ihre
+// Schicht (Schichtarten sind global) automatisch fuer beide ihrer Teams gilt.
+insertMitgliedschaft.run(mitarbeiterIds[0], peId2, "mitarbeiter");
 
 // Schichtarten sind global -- sie gelten fuer alle Planungseinheiten gleichermassen (siehe lib/db.ts).
 function upsertSchichtart(
@@ -98,7 +137,12 @@ upsertVorlage("Nachtschicht 3er Block", [
 
 console.log("Seed abgeschlossen.");
 console.log("Login-Daten:");
-console.log("  Admin:      admin@schichtweb.de / admin123");
-console.log("  Planer:     planer@schichtweb.de / planer123");
-console.log("  Mitarbeiter: anna@schichtweb.de / ben@schichtweb.de / clara@schichtweb.de, jeweils test1234");
+console.log("  Admin:       admin@schichtweb.de / admin123");
+console.log("  Planer:      planer@schichtweb.de / planer123");
+console.log(`  Mitarbeiter (${mitarbeiterIds.length}, jeweils test1234): ${vornamen.map((v) => `${v.toLowerCase()}@schichtweb.de`).join(", ")}`);
+console.log(
+  `  Davon Team 1: ${vornamen.length - 5} (${vornamen.slice(0, -5).join(", ")}) · Team 2: 5 exklusiv (${vornamen
+    .slice(-5)
+    .join(", ")}) + ${vornamen[0]} (zusaetzlich)`
+);
 console.log({ peId, peId2, fruehId, spaetId, nachtId, krankId, urlaubId });
