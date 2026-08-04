@@ -217,6 +217,10 @@ body {
 .uebersicht-monat .freischicht-hinweis { font-size: 0.68rem; }
 .uebersicht-legende { display: flex; flex-wrap: wrap; gap: 0.6rem 1.2rem; }
 .uebersicht-legende-eintrag { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; }
+.uebersicht-legende-initialen {
+  display: inline-block; padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.8rem;
+  background: #e2e8f0; color: #475569; font-weight: 600;
+}
 
 /* Rasteransicht (Jahresabfrage) */
 .raster-scroll { overflow-x: auto; }

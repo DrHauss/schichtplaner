@@ -174,6 +174,21 @@ export default function TeamUebersichtPage() {
     return Array.from(nachKuerzel.values()).sort((a, b) => a.bezeichnung.localeCompare(b.bezeichnung, "de"));
   }, [einheiten]);
 
+  // Die Bereitschaften-Zeilen zeigen aus Platzgruenden nur Initialen (siehe initialen()) --
+  // welche Bereitschaftsart eine Zeile ist, steht bereits als Zeilenbeschriftung in der Tabelle
+  // selbst, muss also nicht zusaetzlich in der Legende wiederholt werden. Was die Legende
+  // stattdessen aufloesen muss, sind die Initialen selbst (mehrdeutig ohne Tooltip/Hover, das im
+  // PDF-Export ohnehin nicht funktioniert).
+  const bereitschaftInitialenListe = useMemo(() => {
+    const nachBenutzer = new Map<number, { benutzerId: number; name: string; initialen: string }>();
+    for (const b of bereitschaften) {
+      if (!nachBenutzer.has(b.benutzerId)) {
+        nachBenutzer.set(b.benutzerId, { benutzerId: b.benutzerId, name: b.mitarbeiterName, initialen: initialen(b.mitarbeiterName) });
+      }
+    }
+    return Array.from(nachBenutzer.values()).sort((a, b) => a.name.localeCompare(b.name, "de"));
+  }, [bereitschaften]);
+
   // Echter PDF-Export statt Browser-Druckdialog: der Druckdialog fuegt browserseitig immer eine
   // eigene Kopf-/Fusszeile mit URL/Titel ein, die sich per CSS nicht unterdruecken laesst. jsPDF +
   // jspdf-autotable erzeugen stattdessen ein eigenstaendiges PDF ohne Browser-Chrome, mit fuer
@@ -288,7 +303,7 @@ export default function TeamUebersichtPage() {
       );
     }
 
-    if (schichtartenListe.length > 0 || bereitschaftsartenListe.length > 0) {
+    if (schichtartenListe.length > 0 || bereitschaftInitialenListe.length > 0) {
       if (naechsteStartY > seitenHoehe - 20) {
         doc.addPage();
         naechsteStartY = 12;
@@ -298,22 +313,25 @@ export default function TeamUebersichtPage() {
       naechsteStartY += 5;
       doc.setFontSize(8);
       let x = SEITENRAND_MM;
-      const alleEintraege = [
-        ...schichtartenListe.map((s) => ({ kuerzel: s.kuerzel, bezeichnung: s.bezeichnung, farbe: s.farbe })),
-        ...bereitschaftsartenListe.map((ba) => ({ kuerzel: ba.kuerzel, bezeichnung: ba.bezeichnung, farbe: ba.farbe })),
-      ];
-      for (const e of alleEintraege) {
-        const text = `${e.kuerzel} ${e.bezeichnung}`;
-        const breite = doc.getTextWidth(text) + 10;
+      // Schichtarten mit Farbmuster (Kuerzel steht direkt in den Team-Tabellen), Bereitschaften-
+      // Initialen ohne Farbmuster (welche Bereitschaftsart gemeint ist, steht bereits als
+      // Zeilenbeschriftung -- hier geht es nur um die Aufloesung "wer ist AB/CT/...").
+      const farbEintraege = schichtartenListe.map((s) => ({ text: `${s.kuerzel} ${s.bezeichnung}`, farbe: s.farbe }));
+      const initialenEintraege = bereitschaftInitialenListe.map((b) => ({ text: `${b.initialen} ${b.name}`, farbe: undefined as string | undefined }));
+      for (const e of [...farbEintraege, ...initialenEintraege]) {
+        const platzFuerMuster = e.farbe ? 6 : 0;
+        const breite = doc.getTextWidth(e.text) + platzFuerMuster + 4;
         if (x + breite > doc.internal.pageSize.getWidth() - SEITENRAND_MM) {
           x = SEITENRAND_MM;
           naechsteStartY += 6;
         }
-        const rgb = hexZuRgb(e.farbe) ?? [148, 163, 184];
-        doc.setFillColor(rgb[0], rgb[1], rgb[2]);
-        doc.rect(x, naechsteStartY - 3.2, 4, 4, "F");
+        if (e.farbe) {
+          const rgb = hexZuRgb(e.farbe) ?? [148, 163, 184];
+          doc.setFillColor(rgb[0], rgb[1], rgb[2]);
+          doc.rect(x, naechsteStartY - 3.2, 4, 4, "F");
+        }
         doc.setTextColor(30, 41, 59);
-        doc.text(text, x + 6, naechsteStartY);
+        doc.text(e.text, x + platzFuerMuster, naechsteStartY);
         x += breite;
       }
     }
@@ -472,7 +490,7 @@ export default function TeamUebersichtPage() {
           );
         })}
 
-      {!loading && (schichtartenListe.length > 0 || bereitschaftsartenListe.length > 0) && (
+      {!loading && (schichtartenListe.length > 0 || bereitschaftInitialenListe.length > 0) && (
         <section>
           <h2>Legende</h2>
           <div className="uebersicht-legende">
@@ -484,12 +502,14 @@ export default function TeamUebersichtPage() {
                 {s.bezeichnung}
               </span>
             ))}
-            {bereitschaftsartenListe.map((ba) => (
-              <span key={`b${ba.id}`} className="uebersicht-legende-eintrag">
-                <span className="badge" style={{ background: ba.farbe, color: kontrastfarbe(ba.farbe) }}>
-                  {ba.kuerzel}
-                </span>
-                {ba.bezeichnung}
+            {/* Welche Bereitschaftsart eine Zeile ist, steht schon als Zeilenbeschriftung in der
+                Bereitschaften-Tabelle -- hier werden stattdessen die dort verwendeten Initialen
+                (siehe initialen()) auf volle Namen aufgeloest, da diese ohne Tooltip/Hover (bzw.
+                im PDF-Export) sonst mehrdeutig blieben. */}
+            {bereitschaftInitialenListe.map((b) => (
+              <span key={`b${b.benutzerId}`} className="uebersicht-legende-eintrag">
+                <span className="uebersicht-legende-initialen">{b.initialen}</span>
+                {b.name}
               </span>
             ))}
           </div>
