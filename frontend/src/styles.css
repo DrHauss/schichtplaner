@@ -182,17 +182,21 @@ body {
 .radierer-auswahl-liste li { display: flex; align-items: center; gap: 0.5rem; border-top: 1px solid #f1f5f9; padding-top: 0.4rem; }
 .radierer-auswahl-liste li button { margin-left: auto; }
 
-/* Team-Uebersicht: monatsweise, kompakt, mit hervorgehobenen Wochenenden/Feiertagen */
+/* Team-Uebersicht: monatsweise, kompakt, mit hervorgehobenen Wochenenden/Feiertagen.
+   table-layout: fixed mit expliziten (nicht nur Mindest-)Breiten sorgt dafuer, dass die
+   Tages-Spalten in JEDER Tabelle auf der Seite (Bereitschaften-Block, jedes Team) exakt gleich
+   breit sind -- unabhaengig vom Inhalt der jeweiligen Tabelle, der sonst je Tabelle zu
+   unterschiedlichen, "springenden" Spaltenbreiten fuehrt. */
 .uebersicht-monat-scroll { overflow-x: auto; margin-bottom: 1rem; }
-.uebersicht-monat { white-space: nowrap; font-size: 0.78rem; }
-.uebersicht-monat th, .uebersicht-monat td { padding: 0.2rem 0.3rem; text-align: center; min-width: 2rem; }
+.uebersicht-monat { table-layout: fixed; width: auto; white-space: nowrap; font-size: 0.78rem; }
+.uebersicht-monat th, .uebersicht-monat td { padding: 0.2rem 0.3rem; text-align: center; width: 2.1rem; overflow: hidden; text-overflow: ellipsis; }
 .uebersicht-monat th:first-child, .uebersicht-monat td:first-child {
   text-align: left;
   position: sticky;
   left: 0;
   background: white;
   z-index: 1;
-  min-width: 8rem;
+  width: 9rem;
 }
 .uebersicht-monat .tag-nr { font-weight: 600; line-height: 1.1; }
 .uebersicht-monat .tag-wt { font-weight: 400; color: #64748b; font-size: 0.68rem; line-height: 1.1; }
@@ -236,6 +240,23 @@ body {
 .abfrage-token-page { max-width: 640px; margin: 0 auto; padding: 1.5rem; }
 .abfrage-token-kopf { margin-bottom: 1.5rem; }
 .abfrage-token-kopf .brand { font-weight: 700; color: #2563eb; margin-bottom: 0.5rem; }
+
+/* PDF-Export der Team-Uebersicht ueber den Browser-Druckdialog ("Als PDF speichern"): Navigation,
+   Toolbar und Hinweistexte werden ausgeblendet, jeder Team-/Bereitschafts-Abschnitt bleibt
+   zusammenhaengend auf einer Seite, und die Tages-Spalten werden schmaler skaliert, damit ein
+   ganzer Monat auf eine A4-Querseite passt. */
+@media print {
+  /* p.hint (Erklaertexte) ausblenden, aber NICHT das inline span.hint mit dem Standort neben dem
+     Team-Namen (h2) -- der gehoert inhaltlich zur Ueberschrift, nicht zu den UI-Hinweisen. */
+  .topbar, .toolbar, .page > p.hint, section > p.hint { display: none !important; }
+  .page { padding: 0; }
+  .uebersicht-monat-scroll { overflow: visible !important; }
+  .uebersicht-monat { font-size: 0.62rem; }
+  .uebersicht-monat th, .uebersicht-monat td { width: 1.5rem; padding: 0.1rem 0.15rem; }
+  .uebersicht-monat th:first-child, .uebersicht-monat td:first-child { width: 6.5rem; position: static; }
+  section { break-inside: avoid; page-break-inside: avoid; }
+  @page { size: landscape; margin: 10mm; }
+}
 
 @media (max-width: 720px) {
   .raster-matrix { font-size: 0.85rem; }

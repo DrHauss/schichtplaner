@@ -157,6 +157,9 @@ export default function TeamUebersichtPage() {
         <button onClick={() => monatWechseln(-1)}>← Vormonat</button>
         <span style={{ minWidth: "10rem", textAlign: "center" }}>{monatLabel}</span>
         <button onClick={() => monatWechseln(1)}>Nächster Monat →</button>
+        {/* Nutzt den Browser-Druckdialog ("Als PDF speichern") -- @media print in styles.css
+            blendet Navigation/Toolbar/Hinweise aus und skaliert die Tabellen auf Querformat. */}
+        <button onClick={() => window.print()}>Als PDF exportieren</button>
       </div>
 
       {loading && <div className="center-info">Lade…</div>}
@@ -190,8 +193,16 @@ export default function TeamUebersichtPage() {
                     {tage.map((t) => {
                       const namen = bereitschaften.filter((b) => b.bereitschaftsartId === ba.id && b.datum === t).map((b) => b.mitarbeiterName);
                       return (
-                        <td key={t} className={tagKlasse(t)} title={namen.join(", ")}>
-                          {namen.length === 0 ? "" : namen.length === 1 ? namen[0] : `${namen.length}×`}
+                        <td key={t} className={tagKlasse(t)}>
+                          {/* Immer ein kompaktes Badge statt des Namens im Klartext -- sonst wird
+                              diese Spalte bei einem einzelnen langen Namen breiter als die
+                              gleichnamige Spalte in den Team-Tabellen (siehe table-layout: fixed
+                              in styles.css). Die Namen stehen vollstaendig im Tooltip. */}
+                          {namen.length > 0 && (
+                            <span className="badge" style={{ background: ba.farbe }} title={namen.join(", ")}>
+                              {namen.length}
+                            </span>
+                          )}
                         </td>
                       );
                     })}
