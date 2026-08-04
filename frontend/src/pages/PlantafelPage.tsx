@@ -565,13 +565,31 @@ export default function PlantafelPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kontextMenu]);
 
-  async function kontextDienstLoeschen() {
+  // Dienst und Abwesenheit werden getrennt geloescht (Abwesenheiten sind keine Dienste) -- welcher
+  // Loeschen-Punkt im Menue ueberhaupt angeboten wird, entscheidet sich danach, ob die jeweilige
+  // Kategorie in der Auswahl vorkommt (siehe hatDienst/hatAbwesenheit/hatBereitschaft unten).
+  async function kontextKategorieLoeschen(kategorie: "dienst" | "abwesenheit") {
     if (!kontextMenu) return;
     const zellen = kontextMenu.zellen;
     kontextMenuSchliessen();
     setBusy(true);
-    for (const z of gesammelteZuweisungen(zellen)) {
+    const treffer = gesammelteZuweisungen(zellen).filter(
+      (z) => schichtarten.find((sa) => sa.id === z.schichtart_id)?.kategorie === kategorie
+    );
+    for (const z of treffer) {
       await api(`/zuweisungen/${z.id}?kommentareBehalten=1&planungseinheitId=${z.peId}`, { method: "DELETE" });
+    }
+    setBusy(false);
+    load();
+  }
+
+  async function kontextBereitschaftLoeschen() {
+    if (!kontextMenu) return;
+    const zellen = kontextMenu.zellen;
+    kontextMenuSchliessen();
+    setBusy(true);
+    for (const b of gesammelteBereitschaften(zellen)) {
+      await api(`/bereitschaften/${b.id}`, { method: "DELETE" });
     }
     setBusy(false);
     load();
@@ -970,26 +988,42 @@ export default function PlantafelPage() {
         />
       )}
 
-      {kontextMenu && (
-        <>
-          <div className="popover-backdrop" onClick={kontextMenuSchliessen} onContextMenu={(e) => { e.preventDefault(); kontextMenuSchliessen(); }} />
-          <PlantafelKontextMenu
-            x={kontextMenu.x}
-            y={kontextMenu.y}
-            einzelneZelle={kontextMenu.zellen.length === 1}
-            dienste={nachDienstUndAbwesenheitGruppiert(schichtarten.filter((sa) => !sa.archiviert)).dienst}
-            abwesenheiten={nachDienstUndAbwesenheitGruppiert(schichtarten.filter((sa) => !sa.archiviert)).abwesenheit}
-            bereitschaftsarten={[...bereitschaftsarten.filter((ba) => !ba.archiviert)].sort((a, b) => a.bezeichnung.localeCompare(b.bezeichnung, "de"))}
-            offenesUntermenue={kontextUntermenue}
-            onUntermenueOeffnen={setKontextUntermenue}
-            onAbbrechen={kontextMenuSchliessen}
-            onDienstLoeschen={kontextDienstLoeschen}
-            onSchichtartWaehlen={kontextSchichtartWaehlen}
-            onBereitschaftsartWaehlen={kontextBereitschaftsartWaehlen}
-            onKommentarEingeben={kontextKommentarEingeben}
-          />
-        </>
-      )}
+      {kontextMenu &&
+        (() => {
+          const zuweisungenInAuswahl = gesammelteZuweisungen(kontextMenu.zellen);
+          const hatDienst = zuweisungenInAuswahl.some(
+            (z) => schichtarten.find((sa) => sa.id === z.schichtart_id)?.kategorie === "dienst"
+          );
+          const hatAbwesenheit = zuweisungenInAuswahl.some(
+            (z) => schichtarten.find((sa) => sa.id === z.schichtart_id)?.kategorie === "abwesenheit"
+          );
+          const hatBereitschaft = gesammelteBereitschaften(kontextMenu.zellen).length > 0;
+          return (
+            <>
+              <div className="popover-backdrop" onClick={kontextMenuSchliessen} onContextMenu={(e) => { e.preventDefault(); kontextMenuSchliessen(); }} />
+              <PlantafelKontextMenu
+                x={kontextMenu.x}
+                y={kontextMenu.y}
+                einzelneZelle={kontextMenu.zellen.length === 1}
+                hatDienst={hatDienst}
+                hatAbwesenheit={hatAbwesenheit}
+                hatBereitschaft={hatBereitschaft}
+                dienste={nachDienstUndAbwesenheitGruppiert(schichtarten.filter((sa) => !sa.archiviert)).dienst}
+                abwesenheiten={nachDienstUndAbwesenheitGruppiert(schichtarten.filter((sa) => !sa.archiviert)).abwesenheit}
+                bereitschaftsarten={[...bereitschaftsarten.filter((ba) => !ba.archiviert)].sort((a, b) => a.bezeichnung.localeCompare(b.bezeichnung, "de"))}
+                offenesUntermenue={kontextUntermenue}
+                onUntermenueOeffnen={setKontextUntermenue}
+                onAbbrechen={kontextMenuSchliessen}
+                onDienstLoeschen={() => kontextKategorieLoeschen("dienst")}
+                onAbwesenheitLoeschen={() => kontextKategorieLoeschen("abwesenheit")}
+                onBereitschaftLoeschen={kontextBereitschaftLoeschen}
+                onSchichtartWaehlen={kontextSchichtartWaehlen}
+                onBereitschaftsartWaehlen={kontextBereitschaftsartWaehlen}
+                onKommentarEingeben={kontextKommentarEingeben}
+              />
+            </>
+          );
+        })()}
     </div>
   );
 }
@@ -1002,6 +1036,9 @@ function PlantafelKontextMenu({
   x,
   y,
   einzelneZelle,
+  hatDienst,
+  hatAbwesenheit,
+  hatBereitschaft,
   dienste,
   abwesenheiten,
   bereitschaftsarten,
@@ -1009,6 +1046,8 @@ function PlantafelKontextMenu({
   onUntermenueOeffnen,
   onAbbrechen,
   onDienstLoeschen,
+  onAbwesenheitLoeschen,
+  onBereitschaftLoeschen,
   onSchichtartWaehlen,
   onBereitschaftsartWaehlen,
   onKommentarEingeben,
@@ -1016,6 +1055,9 @@ function PlantafelKontextMenu({
   x: number;
   y: number;
   einzelneZelle: boolean;
+  hatDienst: boolean;
+  hatAbwesenheit: boolean;
+  hatBereitschaft: boolean;
   dienste: Schichtart[];
   abwesenheiten: Schichtart[];
   bereitschaftsarten: Bereitschaftsart[];
@@ -1023,6 +1065,8 @@ function PlantafelKontextMenu({
   onUntermenueOeffnen: (u: "dienst" | "abwesenheit" | "bereitschaft" | null) => void;
   onAbbrechen: () => void;
   onDienstLoeschen: () => void;
+  onAbwesenheitLoeschen: () => void;
+  onBereitschaftLoeschen: () => void;
   onSchichtartWaehlen: (id: number) => void;
   onBereitschaftsartWaehlen: (id: number) => void;
   onKommentarEingeben: () => void;
@@ -1030,7 +1074,8 @@ function PlantafelKontextMenu({
   // Grobe Bildschirmrand-Begrenzung, damit das Menue nicht ueber den rechten/unteren Rand
   // hinausragt -- die genaue Menuegroesse haengt vom Inhalt ab, daher nur eine grosszuegige Schaetzung.
   const breite = 240;
-  const hoeheGeschaetzt = 40 + (einzelneZelle ? 40 : 0);
+  const anzahlLoeschEintraege = Number(hatDienst) + Number(hatAbwesenheit) + Number(hatBereitschaft);
+  const hoeheGeschaetzt = 220 + anzahlLoeschEintraege * 32 + (einzelneZelle ? 40 : 0);
   const links = Math.min(x, window.innerWidth - breite - 8);
   const oben = Math.min(y, window.innerHeight - hoeheGeschaetzt - 8);
 
@@ -1052,10 +1097,22 @@ function PlantafelKontextMenu({
       <button type="button" className="kontextmenue-eintrag" onMouseEnter={() => onUntermenueOeffnen(null)} onClick={onAbbrechen}>
         Abbrechen
       </button>
-      <div className="kontextmenue-trenner" />
-      <button type="button" className="kontextmenue-eintrag" onMouseEnter={() => onUntermenueOeffnen(null)} onClick={onDienstLoeschen}>
-        Dienst löschen
-      </button>
+      {(hatDienst || hatAbwesenheit || hatBereitschaft) && <div className="kontextmenue-trenner" />}
+      {hatDienst && (
+        <button type="button" className="kontextmenue-eintrag" onMouseEnter={() => onUntermenueOeffnen(null)} onClick={onDienstLoeschen}>
+          Dienst löschen
+        </button>
+      )}
+      {hatAbwesenheit && (
+        <button type="button" className="kontextmenue-eintrag" onMouseEnter={() => onUntermenueOeffnen(null)} onClick={onAbwesenheitLoeschen}>
+          Abwesenheiten löschen
+        </button>
+      )}
+      {hatBereitschaft && (
+        <button type="button" className="kontextmenue-eintrag" onMouseEnter={() => onUntermenueOeffnen(null)} onClick={onBereitschaftLoeschen}>
+          Bereitschaften löschen
+        </button>
+      )}
       <div className="kontextmenue-eintrag kontextmenue-untermenue" onMouseEnter={() => onUntermenueOeffnen("dienst")}>
         Dienst eintragen <span className="kontextmenue-pfeil">▸</span>
         {offenesUntermenue === "dienst" && <div className="kontextmenue-unterliste">{untermenueEintraege(dienste, onSchichtartWaehlen)}</div>}
