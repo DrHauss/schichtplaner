@@ -99,7 +99,10 @@ body {
 .vergabe-panel li { padding: 0.3rem 0; border-bottom: 1px solid var(--mitel-grau-10); }
 
 .toolbar { display: flex; gap: 0.75rem; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; }
+.toolbar-filter { display: flex; gap: 0.4rem; align-items: center; font-size: 0.9rem; }
+.toolbar-filter:first-of-type { margin-left: auto; }
 .plantafel .plan-zelle { cursor: pointer; text-align: center; min-width: 40px; }
+.zelle-ausgeblendet { color: var(--mitel-grau-20); font-size: 0.8rem; }
 .zeile { display: flex; gap: 0.5rem; }
 .inline-label { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 1rem; }
 

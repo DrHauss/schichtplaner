@@ -166,6 +166,13 @@ export default function PlantafelPage() {
   const [{ jahr, monat }, setMonat] = useState(heuteJahrMonat());
   const tage = useMemo(() => tageDesMonats(jahr, monat), [jahr, monat]);
 
+  // Team-Auswahl: "alle" zeigt weiterhin alle Teams als eigene Sektionen untereinander (bisheriges
+  // Verhalten), eine konkrete Planungseinheit blendet alle anderen Sektionen aus. Anzeige-Filter
+  // blendet zusaetzlich innerhalb jeder Zelle Dienste/Abwesenheiten/Bereitschaften aus -- rein
+  // visuell, die zugrundeliegenden Daten und alle Aktionen (Ziehen, Kontextmenue) bleiben unveraendert.
+  const [teamFilter, setTeamFilter] = useState<number | "alle">("alle");
+  const [anzeigeFilter, setAnzeigeFilter] = useState<"alle" | "dienst" | "abwesenheit" | "bereitschaft">("alle");
+
   const [datenNachPe, setDatenNachPe] = useState<Map<number, PlantafelDaten>>(new Map());
   const [vorlagenNachPe, setVorlagenNachPe] = useState<Map<number, Vorlage[]>>(new Map());
   const [schichtarten, setSchichtarten] = useState<Schichtart[]>([]);
@@ -565,13 +572,31 @@ export default function PlantafelPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kontextMenu]);
 
-  async function kontextDienstLoeschen() {
+  // Dienst und Abwesenheit werden getrennt geloescht (Abwesenheiten sind keine Dienste) -- welcher
+  // Loeschen-Punkt im Menue ueberhaupt angeboten wird, entscheidet sich danach, ob die jeweilige
+  // Kategorie in der Auswahl vorkommt (siehe hatDienst/hatAbwesenheit/hatBereitschaft unten).
+  async function kontextKategorieLoeschen(kategorie: "dienst" | "abwesenheit") {
     if (!kontextMenu) return;
     const zellen = kontextMenu.zellen;
     kontextMenuSchliessen();
     setBusy(true);
-    for (const z of gesammelteZuweisungen(zellen)) {
+    const treffer = gesammelteZuweisungen(zellen).filter(
+      (z) => schichtarten.find((sa) => sa.id === z.schichtart_id)?.kategorie === kategorie
+    );
+    for (const z of treffer) {
       await api(`/zuweisungen/${z.id}?kommentareBehalten=1&planungseinheitId=${z.peId}`, { method: "DELETE" });
+    }
+    setBusy(false);
+    load();
+  }
+
+  async function kontextBereitschaftLoeschen() {
+    if (!kontextMenu) return;
+    const zellen = kontextMenu.zellen;
+    kontextMenuSchliessen();
+    setBusy(true);
+    for (const b of gesammelteBereitschaften(zellen)) {
+      await api(`/bereitschaften/${b.id}`, { method: "DELETE" });
     }
     setBusy(false);
     load();
@@ -646,6 +671,7 @@ export default function PlantafelPage() {
   }
 
   const monatLabel = new Date(jahr, monat - 1, 1).toLocaleDateString("de-DE", { month: "long", year: "numeric" });
+  const sichtbareEinheiten = teamFilter === "alle" ? einheiten : einheiten.filter((pe) => pe.id === teamFilter);
 
   return (
     <div className="page">
@@ -655,6 +681,28 @@ export default function PlantafelPage() {
         <button onClick={() => monatWechseln(-1)}>← Vormonat</button>
         <span style={{ minWidth: "10rem", textAlign: "center" }}>{monatLabel}</span>
         <button onClick={() => monatWechseln(1)}>Nächster Monat →</button>
+
+        <label className="toolbar-filter">
+          Team
+          <select value={teamFilter} onChange={(e) => setTeamFilter(e.target.value === "alle" ? "alle" : Number(e.target.value))}>
+            <option value="alle">Alle Teams</option>
+            {einheiten.map((pe) => (
+              <option key={pe.id} value={pe.id}>
+                {pe.name}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="toolbar-filter">
+          Anzeige
+          <select value={anzeigeFilter} onChange={(e) => setAnzeigeFilter(e.target.value as typeof anzeigeFilter)}>
+            <option value="alle">Alles</option>
+            <option value="dienst">Nur Dienste</option>
+            <option value="abwesenheit">Nur Abwesenheiten</option>
+            <option value="bereitschaft">Nur Bereitschaften</option>
+          </select>
+        </label>
       </div>
 
       {error && <div className="error">{error}</div>}
@@ -743,7 +791,7 @@ export default function PlantafelPage() {
         </span>
       </div>
 
-      {einheiten.map((pe) => {
+      {sichtbareEinheiten.map((pe) => {
         const daten = datenNachPe.get(pe.id);
         const vorlagen = vorlagenNachPe.get(pe.id) ?? [];
         return (
@@ -804,7 +852,17 @@ export default function PlantafelPage() {
                       <tr key={m.id}>
                         <td>{m.name}</td>
                         {tage.map((t) => {
-                          const treffer = zellenZuweisungen(pe.id, m.id, t);
+                          // alleTreffer/alleBereitschaften sind die tatsaechlichen Daten der Zelle,
+                          // unabhaengig vom Anzeige-Filter -- der Filter blendet nur aus, was
+                          // angezeigt wird, aendert aber nichts an Konfliktpruefung, "frei"-Erkennung
+                          // oder den ueber Ziehen/Kontextmenue verfuegbaren Aktionen.
+                          const alleTreffer = zellenZuweisungen(pe.id, m.id, t);
+                          const treffer =
+                            anzeigeFilter === "bereitschaft"
+                              ? []
+                              : anzeigeFilter === "alle"
+                              ? alleTreffer
+                              : alleTreffer.filter((z) => schichtarten.find((sa) => sa.id === z.schichtart_id)?.kategorie === anzeigeFilter);
                           const klassen = ["plan-zelle", istWochenende(t) ? "wochenende" : "", feiertage.has(t) ? "feiertag" : ""]
                             .filter(Boolean)
                             .join(" ");
@@ -815,8 +873,9 @@ export default function PlantafelPage() {
                           // normalen Schicht-Zeile als Konflikt markiert. Die einzelnen Badges
                           // bleiben dabei klickbar, damit der Planer den Konflikt direkt hier
                           // aufloesen kann (z. B. eine der beiden Zuweisungen loeschen).
-                          const konflikt = treffer.length > 1;
-                          const bereitschaften = zellenBereitschaften(pe.id, m.id, t);
+                          const konflikt = alleTreffer.length > 1;
+                          const bereitschaften =
+                            anzeigeFilter === "dienst" || anzeigeFilter === "abwesenheit" ? [] : zellenBereitschaften(pe.id, m.id, t);
                           return (
                             <td
                               key={t}
@@ -862,6 +921,14 @@ export default function PlantafelPage() {
                                       </span>
                                     );
                                   })
+                                ) : alleTreffer.length > 0 ? (
+                                  // Die Zelle hat tatsaechlich eine Zuweisung, die der Anzeige-Filter
+                                  // gerade ausblendet (z. B. "Nur Abwesenheiten" auf einer Zelle mit
+                                  // Dienst) -- das ist etwas anderes als eine wirklich freie Zelle,
+                                  // daher kein "frei" und kein Klick auf die Freischicht-Details.
+                                  <span className="zelle-ausgeblendet" title="Durch Anzeige-Filter ausgeblendet">
+                                    –
+                                  </span>
                                 ) : (
                                   (() => {
                                     const freiKommentare = freischichtKommentareFuer(pe.id, m.id, t);
@@ -970,26 +1037,42 @@ export default function PlantafelPage() {
         />
       )}
 
-      {kontextMenu && (
-        <>
-          <div className="popover-backdrop" onClick={kontextMenuSchliessen} onContextMenu={(e) => { e.preventDefault(); kontextMenuSchliessen(); }} />
-          <PlantafelKontextMenu
-            x={kontextMenu.x}
-            y={kontextMenu.y}
-            einzelneZelle={kontextMenu.zellen.length === 1}
-            dienste={nachDienstUndAbwesenheitGruppiert(schichtarten.filter((sa) => !sa.archiviert)).dienst}
-            abwesenheiten={nachDienstUndAbwesenheitGruppiert(schichtarten.filter((sa) => !sa.archiviert)).abwesenheit}
-            bereitschaftsarten={[...bereitschaftsarten.filter((ba) => !ba.archiviert)].sort((a, b) => a.bezeichnung.localeCompare(b.bezeichnung, "de"))}
-            offenesUntermenue={kontextUntermenue}
-            onUntermenueOeffnen={setKontextUntermenue}
-            onAbbrechen={kontextMenuSchliessen}
-            onDienstLoeschen={kontextDienstLoeschen}
-            onSchichtartWaehlen={kontextSchichtartWaehlen}
-            onBereitschaftsartWaehlen={kontextBereitschaftsartWaehlen}
-            onKommentarEingeben={kontextKommentarEingeben}
-          />
-        </>
-      )}
+      {kontextMenu &&
+        (() => {
+          const zuweisungenInAuswahl = gesammelteZuweisungen(kontextMenu.zellen);
+          const hatDienst = zuweisungenInAuswahl.some(
+            (z) => schichtarten.find((sa) => sa.id === z.schichtart_id)?.kategorie === "dienst"
+          );
+          const hatAbwesenheit = zuweisungenInAuswahl.some(
+            (z) => schichtarten.find((sa) => sa.id === z.schichtart_id)?.kategorie === "abwesenheit"
+          );
+          const hatBereitschaft = gesammelteBereitschaften(kontextMenu.zellen).length > 0;
+          return (
+            <>
+              <div className="popover-backdrop" onClick={kontextMenuSchliessen} onContextMenu={(e) => { e.preventDefault(); kontextMenuSchliessen(); }} />
+              <PlantafelKontextMenu
+                x={kontextMenu.x}
+                y={kontextMenu.y}
+                einzelneZelle={kontextMenu.zellen.length === 1}
+                hatDienst={hatDienst}
+                hatAbwesenheit={hatAbwesenheit}
+                hatBereitschaft={hatBereitschaft}
+                dienste={nachDienstUndAbwesenheitGruppiert(schichtarten.filter((sa) => !sa.archiviert)).dienst}
+                abwesenheiten={nachDienstUndAbwesenheitGruppiert(schichtarten.filter((sa) => !sa.archiviert)).abwesenheit}
+                bereitschaftsarten={[...bereitschaftsarten.filter((ba) => !ba.archiviert)].sort((a, b) => a.bezeichnung.localeCompare(b.bezeichnung, "de"))}
+                offenesUntermenue={kontextUntermenue}
+                onUntermenueOeffnen={setKontextUntermenue}
+                onAbbrechen={kontextMenuSchliessen}
+                onDienstLoeschen={() => kontextKategorieLoeschen("dienst")}
+                onAbwesenheitLoeschen={() => kontextKategorieLoeschen("abwesenheit")}
+                onBereitschaftLoeschen={kontextBereitschaftLoeschen}
+                onSchichtartWaehlen={kontextSchichtartWaehlen}
+                onBereitschaftsartWaehlen={kontextBereitschaftsartWaehlen}
+                onKommentarEingeben={kontextKommentarEingeben}
+              />
+            </>
+          );
+        })()}
     </div>
   );
 }
@@ -1002,6 +1085,9 @@ function PlantafelKontextMenu({
   x,
   y,
   einzelneZelle,
+  hatDienst,
+  hatAbwesenheit,
+  hatBereitschaft,
   dienste,
   abwesenheiten,
   bereitschaftsarten,
@@ -1009,6 +1095,8 @@ function PlantafelKontextMenu({
   onUntermenueOeffnen,
   onAbbrechen,
   onDienstLoeschen,
+  onAbwesenheitLoeschen,
+  onBereitschaftLoeschen,
   onSchichtartWaehlen,
   onBereitschaftsartWaehlen,
   onKommentarEingeben,
@@ -1016,6 +1104,9 @@ function PlantafelKontextMenu({
   x: number;
   y: number;
   einzelneZelle: boolean;
+  hatDienst: boolean;
+  hatAbwesenheit: boolean;
+  hatBereitschaft: boolean;
   dienste: Schichtart[];
   abwesenheiten: Schichtart[];
   bereitschaftsarten: Bereitschaftsart[];
@@ -1023,6 +1114,8 @@ function PlantafelKontextMenu({
   onUntermenueOeffnen: (u: "dienst" | "abwesenheit" | "bereitschaft" | null) => void;
   onAbbrechen: () => void;
   onDienstLoeschen: () => void;
+  onAbwesenheitLoeschen: () => void;
+  onBereitschaftLoeschen: () => void;
   onSchichtartWaehlen: (id: number) => void;
   onBereitschaftsartWaehlen: (id: number) => void;
   onKommentarEingeben: () => void;
@@ -1030,7 +1123,8 @@ function PlantafelKontextMenu({
   // Grobe Bildschirmrand-Begrenzung, damit das Menue nicht ueber den rechten/unteren Rand
   // hinausragt -- die genaue Menuegroesse haengt vom Inhalt ab, daher nur eine grosszuegige Schaetzung.
   const breite = 240;
-  const hoeheGeschaetzt = 40 + (einzelneZelle ? 40 : 0);
+  const anzahlLoeschEintraege = Number(hatDienst) + Number(hatAbwesenheit) + Number(hatBereitschaft);
+  const hoeheGeschaetzt = 220 + anzahlLoeschEintraege * 32 + (einzelneZelle ? 40 : 0);
   const links = Math.min(x, window.innerWidth - breite - 8);
   const oben = Math.min(y, window.innerHeight - hoeheGeschaetzt - 8);
 
@@ -1052,10 +1146,22 @@ function PlantafelKontextMenu({
       <button type="button" className="kontextmenue-eintrag" onMouseEnter={() => onUntermenueOeffnen(null)} onClick={onAbbrechen}>
         Abbrechen
       </button>
-      <div className="kontextmenue-trenner" />
-      <button type="button" className="kontextmenue-eintrag" onMouseEnter={() => onUntermenueOeffnen(null)} onClick={onDienstLoeschen}>
-        Dienst löschen
-      </button>
+      {(hatDienst || hatAbwesenheit || hatBereitschaft) && <div className="kontextmenue-trenner" />}
+      {hatDienst && (
+        <button type="button" className="kontextmenue-eintrag" onMouseEnter={() => onUntermenueOeffnen(null)} onClick={onDienstLoeschen}>
+          Dienst löschen
+        </button>
+      )}
+      {hatAbwesenheit && (
+        <button type="button" className="kontextmenue-eintrag" onMouseEnter={() => onUntermenueOeffnen(null)} onClick={onAbwesenheitLoeschen}>
+          Abwesenheiten löschen
+        </button>
+      )}
+      {hatBereitschaft && (
+        <button type="button" className="kontextmenue-eintrag" onMouseEnter={() => onUntermenueOeffnen(null)} onClick={onBereitschaftLoeschen}>
+          Bereitschaften löschen
+        </button>
+      )}
       <div className="kontextmenue-eintrag kontextmenue-untermenue" onMouseEnter={() => onUntermenueOeffnen("dienst")}>
         Dienst eintragen <span className="kontextmenue-pfeil">▸</span>
         {offenesUntermenue === "dienst" && <div className="kontextmenue-unterliste">{untermenueEintraege(dienste, onSchichtartWaehlen)}</div>}
