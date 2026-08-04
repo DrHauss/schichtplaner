@@ -224,8 +224,24 @@ export default function TeamUebersichtPage() {
     doc.text(`Team-Übersicht -- ${monatLabel}`, SEITENRAND_MM, 10);
     let naechsteStartY = 16;
 
+    // Geschaetzte Gesamthoehe des Abschnitts (Titel + zweizeiliger Kopf + eine Zeile je
+    // Mitarbeiter/Bereitschaftsart), damit VOR dem Zeichnen entschieden werden kann, ob ein
+    // Seitenumbruch noetig ist -- sonst wuerde autoTable die Tabelle einfach mitten drin auf die
+    // naechste Seite weiterlaufen lassen, sobald der Rest der aktuellen Seite nicht mehr reicht,
+    // und ein Team auf zwei Seiten aufteilen. Die Konstanten sind bewusst grosszuegig geschaetzt
+    // (eher ein Umbruch zu viel als eine Tabelle, die doch noch mitten drin umbricht).
+    const TITEL_HOEHE_MM = 4;
+    const KOPF_HOEHE_MM = 8;
+    const ZEILEN_HOEHE_MM = 4.5;
+
     function abschnittZeichnen(titel: string, zeilen: { label: string; zellen: { text: string; farbe?: string }[] }[]) {
-      if (naechsteStartY > seitenHoehe - 30) {
+      const geschaetzteHoehe = TITEL_HOEHE_MM + KOPF_HOEHE_MM + zeilen.length * ZEILEN_HOEHE_MM;
+      const nutzbareHoeheProSeite = seitenHoehe - 12 - 12;
+      const passtNichtMehrAufAktuelleSeite = naechsteStartY + geschaetzteHoehe > seitenHoehe - 12;
+      // Passt der Abschnitt selbst nicht auf eine komplette leere Seite (sehr grosses Team),
+      // bringt ein erzwungener Umbruch nichts -- dann lieber den natuerlichen Tabellenumbruch von
+      // autoTable zulassen, statt eine leere Seite zu verschwenden.
+      if (passtNichtMehrAufAktuelleSeite && geschaetzteHoehe <= nutzbareHoeheProSeite) {
         doc.addPage();
         naechsteStartY = 12;
       }

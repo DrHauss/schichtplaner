@@ -13,6 +13,22 @@ export function hexZuRgb(hexFarbe: string | undefined | null): [number, number, 
   return [r, g, b];
 }
 
+// Mitel-Markenfarben (Mitel Brand Guidelines) zur Schnellauswahl beim Anlegen/Bearbeiten von
+// Schicht-/Bereitschaftsarten -- ergaenzt den nativen Colorpicker (der jede beliebige Farbe
+// zulaesst), macht aber die markenkonformen Farben mit einem Klick erreichbar.
+export const MITEL_FARBEN: { name: string; hex: string }[] = [
+  { name: "Mitel Dunkelblau", hex: "#15325f" },
+  { name: "Mitel Mittelblau", hex: "#0073d0" },
+  { name: "Mitel Hellblau", hex: "#00a1e0" },
+  { name: "Mitel Grau", hex: "#58595b" },
+  { name: "Mitel Lila", hex: "#812cc4" },
+  { name: "Mitel Türkis", hex: "#72efdd" },
+  { name: "Mitel Grün", hex: "#8ac926" },
+  { name: "Mitel Gelb", hex: "#fdb714" },
+  { name: "Mitel Pink", hex: "#e2348b" },
+  { name: "Mitel Rot", hex: "#ec3831" },
+];
+
 // Waehlt Schwarz/Weiss als Textfarbe je nach wahrgenommener Helligkeit des Hintergrunds (YIQ-
 // Naeherung), damit z. B. helle Schichtarten-Farben (Gelb, Hellgruen) nicht mit weissem Text auf
 // weiss aehnlichem Grund unleserlich werden.

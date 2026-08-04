@@ -1,6 +1,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
+import MitelFarbauswahl from "../components/MitelFarbauswahl";
 
 interface Schichtart {
   id: number;
@@ -300,6 +301,7 @@ function SchichtartenSektion() {
         <label>
           Farbe
           <input type="color" value={farbe} onChange={(e) => setFarbe(e.target.value)} />
+          <MitelFarbauswahl wert={farbe} onWahl={setFarbe} />
         </label>
         <label>
           Kategorie
@@ -396,6 +398,7 @@ function SchichtartenSektion() {
                 </td>
                 <td>
                   <input type="color" value={editForm.farbe} onChange={(e) => setEditForm({ ...editForm, farbe: e.target.value })} />
+                  <MitelFarbauswahl wert={editForm.farbe} onWahl={(hex) => setEditForm({ ...editForm, farbe: hex })} />
                 </td>
                 <td>
                   <select
@@ -551,6 +554,7 @@ function BereitschaftsartenSektion() {
         <label>
           Farbe
           <input type="color" value={farbe} onChange={(e) => setFarbe(e.target.value)} />
+          <MitelFarbauswahl wert={farbe} onWahl={setFarbe} />
         </label>
         <button type="submit">Anlegen</button>
       </form>
@@ -578,6 +582,7 @@ function BereitschaftsartenSektion() {
                 </td>
                 <td>
                   <input type="color" value={editForm.farbe} onChange={(e) => setEditForm({ ...editForm, farbe: e.target.value })} />
+                  <MitelFarbauswahl wert={editForm.farbe} onWahl={(hex) => setEditForm({ ...editForm, farbe: hex })} />
                 </td>
                 <td>{editForm.archiviert ? "Archiviert" : "Aktiv"}</td>
                 <td>
