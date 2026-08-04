@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
+import { jsPDF } from "jspdf";
+import autoTable from "jspdf-autotable";
 import { api } from "../api/client";
+import { hexZuRgb, kontrastfarbe } from "../lib/farbe";
 
 interface ZuweisungKommentar {
   id: number;
@@ -86,6 +89,16 @@ function istWochenende(datumIso: string): boolean {
   return tag === 0 || tag === 6;
 }
 
+// Vorname- + Nachname-Initiale (z. B. "Anna Beispiel" -> "AB") -- kompakt genug, um wie ein
+// normales Schicht-Kuerzel in die feste Spaltenbreite zu passen, aber anders als eine reine
+// Anzahl direkt erkennbar, wer gemeint ist.
+function initialen(name: string): string {
+  const teile = name.trim().split(/\s+/).filter(Boolean);
+  if (teile.length === 0) return "";
+  if (teile.length === 1) return teile[0].slice(0, 2).toUpperCase();
+  return (teile[0][0] + teile[teile.length - 1][0]).toUpperCase();
+}
+
 // Teamuebergreifende, rein lesende Uebersicht der veroeffentlichten Schichten aller
 // Planungseinheiten -- fuer alle angemeldeten Nutzer sichtbar, nicht nur fuer Planer oder
 // Mitglieder der jeweiligen Einheit. Entwuerfe bleiben bewusst nur in der Plantafel der
@@ -149,6 +162,142 @@ export default function TeamUebersichtPage() {
     return Array.from(nachId.values()).sort((a, b) => a.bezeichnung.localeCompare(b.bezeichnung, "de"));
   }, [bereitschaften]);
 
+  // Legende: alle in diesem Monat tatsaechlich vorkommenden Schichtarten (ueber alle Teams) --
+  // dedupliziert nach Kuerzel, da Zuweisungen keine eigene Schichtart-ID mitliefern.
+  const schichtartenListe = useMemo(() => {
+    const nachKuerzel = new Map<string, { kuerzel: string; bezeichnung: string; farbe: string }>();
+    for (const pe of einheiten) {
+      for (const z of pe.zuweisungen) {
+        if (!nachKuerzel.has(z.kuerzel)) nachKuerzel.set(z.kuerzel, { kuerzel: z.kuerzel, bezeichnung: z.bezeichnung, farbe: z.farbe });
+      }
+    }
+    return Array.from(nachKuerzel.values()).sort((a, b) => a.bezeichnung.localeCompare(b.bezeichnung, "de"));
+  }, [einheiten]);
+
+  // Echter PDF-Export statt Browser-Druckdialog: der Druckdialog fuegt browserseitig immer eine
+  // eigene Kopf-/Fusszeile mit URL/Titel ein, die sich per CSS nicht unterdruecken laesst. jsPDF +
+  // jspdf-autotable erzeugen stattdessen ein eigenstaendiges PDF ohne Browser-Chrome, mit fuer
+  // alle Tabellen (Bereitschaften-Block + jedes Team) identischen Spaltenbreiten -- das
+  // garantiert dieselbe Spaltenausrichtung wie in der Bildschirmansicht, unabhaengig vom Inhalt
+  // der jeweiligen Tabelle.
+  const NAME_SPALTE_MM = 30;
+  const TAG_SPALTE_MM = 8;
+  const SEITENRAND_MM = 6;
+
+  function pdfExportieren() {
+    const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+    const seitenHoehe = doc.internal.pageSize.getHeight();
+    const spaltenStile: Record<number, { cellWidth: number }> = { 0: { cellWidth: NAME_SPALTE_MM } };
+    tage.forEach((_, i) => {
+      spaltenStile[i + 1] = { cellWidth: TAG_SPALTE_MM };
+    });
+    const kopfzeile = ["", ...tage.map((t) => `${Number(t.slice(8, 10))}\n${wochentagKurz(t)}`)];
+
+    doc.setFontSize(14);
+    doc.text(`Team-Übersicht -- ${monatLabel}`, SEITENRAND_MM, 10);
+    let naechsteStartY = 16;
+
+    function abschnittZeichnen(titel: string, zeilen: { label: string; zellen: { text: string; farbe?: string }[] }[]) {
+      if (naechsteStartY > seitenHoehe - 30) {
+        doc.addPage();
+        naechsteStartY = 12;
+      }
+      doc.setFontSize(11);
+      doc.text(titel, SEITENRAND_MM, naechsteStartY);
+      naechsteStartY += 4;
+      const body = zeilen.map((z) => [z.label, ...z.zellen.map((c) => c.text)]);
+      const farbeNachZelle = new Map<string, string>();
+      zeilen.forEach((z, zeilenIdx) => {
+        z.zellen.forEach((c, spaltenIdx) => {
+          if (c.farbe) farbeNachZelle.set(`${zeilenIdx}-${spaltenIdx + 1}`, c.farbe);
+        });
+      });
+      autoTable(doc, {
+        head: [kopfzeile],
+        body,
+        startY: naechsteStartY,
+        margin: { left: SEITENRAND_MM, right: SEITENRAND_MM, bottom: 12 },
+        theme: "grid",
+        styles: { fontSize: 5.5, cellPadding: 0.6, overflow: "linebreak", lineWidth: 0.1, valign: "middle", halign: "center" },
+        headStyles: { fillColor: [30, 41, 59], textColor: [255, 255, 255], fontSize: 5.5, halign: "center" },
+        columnStyles: { ...spaltenStile, 0: { ...spaltenStile[0], halign: "left" } },
+        rowPageBreak: "avoid",
+        didParseCell: (data) => {
+          if (data.section !== "body" || data.column.index === 0) return;
+          const farbe = farbeNachZelle.get(`${data.row.index}-${data.column.index}`);
+          if (farbe) {
+            const rgb = hexZuRgb(farbe);
+            if (rgb) {
+              data.cell.styles.fillColor = rgb;
+              const kontrast = hexZuRgb(kontrastfarbe(farbe));
+              if (kontrast) data.cell.styles.textColor = kontrast;
+            }
+          }
+        },
+      });
+      naechsteStartY = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 8;
+    }
+
+    if (bereitschaftsartenListe.length > 0) {
+      abschnittZeichnen(
+        "Bereitschaften",
+        bereitschaftsartenListe.map((ba) => ({
+          label: ba.bezeichnung,
+          zellen: tage.map((t) => {
+            const namen = bereitschaften.filter((b) => b.bereitschaftsartId === ba.id && b.datum === t).map((b) => b.mitarbeiterName);
+            return { text: namen.map(initialen).join(","), farbe: namen.length > 0 ? ba.farbe : undefined };
+          }),
+        }))
+      );
+    }
+
+    for (const pe of einheiten) {
+      if (pe.mitarbeiter.length === 0) continue;
+      abschnittZeichnen(
+        `${pe.name}${pe.standort ? ` · ${pe.standort}` : ""}`,
+        pe.mitarbeiter.map((m) => ({
+          label: m.name,
+          zellen: tage.map((t) => {
+            const treffer = pe.zuweisungen.filter((z) => z.benutzerId === m.id && z.datum === t);
+            return { text: treffer.map((z) => z.kuerzel).join("+"), farbe: treffer[0]?.farbe };
+          }),
+        }))
+      );
+    }
+
+    if (schichtartenListe.length > 0 || bereitschaftsartenListe.length > 0) {
+      if (naechsteStartY > seitenHoehe - 20) {
+        doc.addPage();
+        naechsteStartY = 12;
+      }
+      doc.setFontSize(11);
+      doc.text("Legende", SEITENRAND_MM, naechsteStartY);
+      naechsteStartY += 5;
+      doc.setFontSize(8);
+      let x = SEITENRAND_MM;
+      const alleEintraege = [
+        ...schichtartenListe.map((s) => ({ kuerzel: s.kuerzel, bezeichnung: s.bezeichnung, farbe: s.farbe })),
+        ...bereitschaftsartenListe.map((ba) => ({ kuerzel: ba.kuerzel, bezeichnung: ba.bezeichnung, farbe: ba.farbe })),
+      ];
+      for (const e of alleEintraege) {
+        const text = `${e.kuerzel} ${e.bezeichnung}`;
+        const breite = doc.getTextWidth(text) + 10;
+        if (x + breite > doc.internal.pageSize.getWidth() - SEITENRAND_MM) {
+          x = SEITENRAND_MM;
+          naechsteStartY += 6;
+        }
+        const rgb = hexZuRgb(e.farbe) ?? [148, 163, 184];
+        doc.setFillColor(rgb[0], rgb[1], rgb[2]);
+        doc.rect(x, naechsteStartY - 3.2, 4, 4, "F");
+        doc.setTextColor(30, 41, 59);
+        doc.text(text, x + 6, naechsteStartY);
+        x += breite;
+      }
+    }
+
+    doc.save(`team-uebersicht-${jahr}-${String(monat).padStart(2, "0")}.pdf`);
+  }
+
   return (
     <div className="page">
       <h1>Team-Übersicht</h1>
@@ -157,9 +306,7 @@ export default function TeamUebersichtPage() {
         <button onClick={() => monatWechseln(-1)}>← Vormonat</button>
         <span style={{ minWidth: "10rem", textAlign: "center" }}>{monatLabel}</span>
         <button onClick={() => monatWechseln(1)}>Nächster Monat →</button>
-        {/* Nutzt den Browser-Druckdialog ("Als PDF speichern") -- @media print in styles.css
-            blendet Navigation/Toolbar/Hinweise aus und skaliert die Tabellen auf Querformat. */}
-        <button onClick={() => window.print()}>Als PDF exportieren</button>
+        <button onClick={pdfExportieren}>Als PDF exportieren</button>
       </div>
 
       {loading && <div className="center-info">Lade…</div>}
@@ -185,7 +332,7 @@ export default function TeamUebersichtPage() {
                 {bereitschaftsartenListe.map((ba) => (
                   <tr key={ba.id}>
                     <td>
-                      <span className="badge" style={{ background: ba.farbe }}>
+                      <span className="badge" style={{ background: ba.farbe, color: kontrastfarbe(ba.farbe) }}>
                         &nbsp;
                       </span>{" "}
                       {ba.bezeichnung}
@@ -194,13 +341,14 @@ export default function TeamUebersichtPage() {
                       const namen = bereitschaften.filter((b) => b.bereitschaftsartId === ba.id && b.datum === t).map((b) => b.mitarbeiterName);
                       return (
                         <td key={t} className={tagKlasse(t)}>
-                          {/* Immer ein kompaktes Badge statt des Namens im Klartext -- sonst wird
-                              diese Spalte bei einem einzelnen langen Namen breiter als die
-                              gleichnamige Spalte in den Team-Tabellen (siehe table-layout: fixed
-                              in styles.css). Die Namen stehen vollstaendig im Tooltip. */}
+                          {/* Initialen statt Name im Klartext -- so bleibt die Spalte so schmal
+                              wie in den Team-Tabellen (table-layout: fixed in styles.css), aber
+                              wer Bereitschaft hat, ist direkt sichtbar statt nur per Tooltip (der
+                              beim PDF-Export ohnehin nicht funktioniert). Vollname zusaetzlich im
+                              Tooltip fuer die Bildschirmansicht. */}
                           {namen.length > 0 && (
-                            <span className="badge" style={{ background: ba.farbe }} title={namen.join(", ")}>
-                              {namen.length}
+                            <span className="badge" style={{ background: ba.farbe, color: kontrastfarbe(ba.farbe) }} title={namen.join(", ")}>
+                              {namen.map(initialen).join(",")}
                             </span>
                           )}
                         </td>
@@ -261,7 +409,7 @@ export default function TeamUebersichtPage() {
                                             .join("\n")
                                         : "");
                                     return (
-                                      <span key={z.id} className="badge" style={{ background: z.farbe }} title={titel}>
+                                      <span key={z.id} className="badge" style={{ background: z.farbe, color: kontrastfarbe(z.farbe) }} title={titel}>
                                         {z.kuerzel}
                                         {kommentare.length > 0 && <span className="kommentar-marker" />}
                                       </span>
@@ -300,6 +448,30 @@ export default function TeamUebersichtPage() {
             </section>
           );
         })}
+
+      {!loading && (schichtartenListe.length > 0 || bereitschaftsartenListe.length > 0) && (
+        <section>
+          <h2>Legende</h2>
+          <div className="uebersicht-legende">
+            {schichtartenListe.map((s) => (
+              <span key={s.kuerzel} className="uebersicht-legende-eintrag">
+                <span className="badge" style={{ background: s.farbe, color: kontrastfarbe(s.farbe) }}>
+                  {s.kuerzel}
+                </span>
+                {s.bezeichnung}
+              </span>
+            ))}
+            {bereitschaftsartenListe.map((ba) => (
+              <span key={`b${ba.id}`} className="uebersicht-legende-eintrag">
+                <span className="badge" style={{ background: ba.farbe, color: kontrastfarbe(ba.farbe) }}>
+                  {ba.kuerzel}
+                </span>
+                {ba.bezeichnung}
+              </span>
+            ))}
+          </div>
+        </section>
+      )}
     </div>
   );
 }
