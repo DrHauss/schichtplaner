@@ -148,6 +148,20 @@ body {
 .plantafel .plan-zelle.ziehen-markiert { background: var(--mitel-hellblau-tint) !important; }
 .plantafel .badge { margin: 0.05rem; }
 .badge-entwurf { outline: 2px dashed #f59e0b; outline-offset: 1px; }
+/* Schicht(en) und Bereitschaften stehen in eigenen Zeilen innerhalb der Zelle statt nebeneinander
+   zu fliessen -- Bereitschaften sind konzeptionell zusaetzlich zu (nicht statt) einer Schicht,
+   das soll auch optisch als eigene Zeile erkennbar sein. */
+.zelle-schicht-zeile { display: block; min-height: 1.3rem; }
+.zelle-bereitschaft-zeile { display: block; margin-top: 0.1rem; }
+/* Pro Tag genau eine Schicht ist die Regel -- kommt es dennoch zu mehreren (Datenfehler, z. B.
+   durch eine Schichtboersen-Vergabe ohne Konfliktpruefung), markiert eine rote Warntafel-Musterung
+   die Zelle deutlich als Konflikt. Die einzelnen Schicht-Badges bleiben darin klickbar, damit der
+   Planer den Konflikt direkt aufloesen kann. */
+.zelle-schicht-zeile.zelle-konflikt {
+  background: repeating-linear-gradient(45deg, #ec3831, #ec3831 4px, #ffffff 4px, #ffffff 8px);
+  border-radius: 4px;
+  padding: 0.05rem;
+}
 /* Bereitschaften stapeln sich zusaetzlich zu (nicht statt) einer Schicht/Freischicht in der
    Zelle -- kleinere, runde Chips statt der rechteckigen Schicht-Badges, um "on top of" zu betonen. */
 .bereitschaft-chip {
@@ -211,6 +225,17 @@ body {
 .uebersicht-monat-scroll { overflow-x: auto; margin-bottom: 1rem; }
 .uebersicht-monat { table-layout: fixed; width: auto; white-space: nowrap; font-size: 0.78rem; }
 .uebersicht-monat th, .uebersicht-monat td { padding: 0.15rem 0.2rem; text-align: center; width: 2.7rem; overflow: hidden; text-overflow: ellipsis; }
+.uebersicht-monat td { position: relative; }
+/* Pro Tag genau eine Schicht ist die Regel -- kommt es dennoch zu mehreren (Datenfehler, z. B.
+   durch eine Schichtboersen-Vergabe ohne Konfliktpruefung), faellt das per Warntafel-Musterung
+   sofort auf, statt als zwei normale Schichten nebeneinander unterzugehen. */
+.uebersicht-monat td.zelle-konflikt {
+  background: repeating-linear-gradient(45deg, #ec3831, #ec3831 4px, #ffffff 4px, #ffffff 8px);
+  color: #ffffff;
+  text-shadow: 0 0 2px #000, 0 0 2px #000;
+  font-weight: 700;
+  cursor: help;
+}
 .uebersicht-monat th:first-child, .uebersicht-monat td:first-child {
   text-align: left;
   position: sticky;
