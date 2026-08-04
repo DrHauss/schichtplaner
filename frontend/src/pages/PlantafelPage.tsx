@@ -166,6 +166,13 @@ export default function PlantafelPage() {
   const [{ jahr, monat }, setMonat] = useState(heuteJahrMonat());
   const tage = useMemo(() => tageDesMonats(jahr, monat), [jahr, monat]);
 
+  // Team-Auswahl: "alle" zeigt weiterhin alle Teams als eigene Sektionen untereinander (bisheriges
+  // Verhalten), eine konkrete Planungseinheit blendet alle anderen Sektionen aus. Anzeige-Filter
+  // blendet zusaetzlich innerhalb jeder Zelle Dienste/Abwesenheiten/Bereitschaften aus -- rein
+  // visuell, die zugrundeliegenden Daten und alle Aktionen (Ziehen, Kontextmenue) bleiben unveraendert.
+  const [teamFilter, setTeamFilter] = useState<number | "alle">("alle");
+  const [anzeigeFilter, setAnzeigeFilter] = useState<"alle" | "dienst" | "abwesenheit" | "bereitschaft">("alle");
+
   const [datenNachPe, setDatenNachPe] = useState<Map<number, PlantafelDaten>>(new Map());
   const [vorlagenNachPe, setVorlagenNachPe] = useState<Map<number, Vorlage[]>>(new Map());
   const [schichtarten, setSchichtarten] = useState<Schichtart[]>([]);
@@ -664,6 +671,7 @@ export default function PlantafelPage() {
   }
 
   const monatLabel = new Date(jahr, monat - 1, 1).toLocaleDateString("de-DE", { month: "long", year: "numeric" });
+  const sichtbareEinheiten = teamFilter === "alle" ? einheiten : einheiten.filter((pe) => pe.id === teamFilter);
 
   return (
     <div className="page">
@@ -673,6 +681,28 @@ export default function PlantafelPage() {
         <button onClick={() => monatWechseln(-1)}>← Vormonat</button>
         <span style={{ minWidth: "10rem", textAlign: "center" }}>{monatLabel}</span>
         <button onClick={() => monatWechseln(1)}>Nächster Monat →</button>
+
+        <label className="toolbar-filter">
+          Team
+          <select value={teamFilter} onChange={(e) => setTeamFilter(e.target.value === "alle" ? "alle" : Number(e.target.value))}>
+            <option value="alle">Alle Teams</option>
+            {einheiten.map((pe) => (
+              <option key={pe.id} value={pe.id}>
+                {pe.name}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="toolbar-filter">
+          Anzeige
+          <select value={anzeigeFilter} onChange={(e) => setAnzeigeFilter(e.target.value as typeof anzeigeFilter)}>
+            <option value="alle">Alles</option>
+            <option value="dienst">Nur Dienste</option>
+            <option value="abwesenheit">Nur Abwesenheiten</option>
+            <option value="bereitschaft">Nur Bereitschaften</option>
+          </select>
+        </label>
       </div>
 
       {error && <div className="error">{error}</div>}
@@ -761,7 +791,7 @@ export default function PlantafelPage() {
         </span>
       </div>
 
-      {einheiten.map((pe) => {
+      {sichtbareEinheiten.map((pe) => {
         const daten = datenNachPe.get(pe.id);
         const vorlagen = vorlagenNachPe.get(pe.id) ?? [];
         return (
@@ -822,7 +852,17 @@ export default function PlantafelPage() {
                       <tr key={m.id}>
                         <td>{m.name}</td>
                         {tage.map((t) => {
-                          const treffer = zellenZuweisungen(pe.id, m.id, t);
+                          // alleTreffer/alleBereitschaften sind die tatsaechlichen Daten der Zelle,
+                          // unabhaengig vom Anzeige-Filter -- der Filter blendet nur aus, was
+                          // angezeigt wird, aendert aber nichts an Konfliktpruefung, "frei"-Erkennung
+                          // oder den ueber Ziehen/Kontextmenue verfuegbaren Aktionen.
+                          const alleTreffer = zellenZuweisungen(pe.id, m.id, t);
+                          const treffer =
+                            anzeigeFilter === "bereitschaft"
+                              ? []
+                              : anzeigeFilter === "alle"
+                              ? alleTreffer
+                              : alleTreffer.filter((z) => schichtarten.find((sa) => sa.id === z.schichtart_id)?.kategorie === anzeigeFilter);
                           const klassen = ["plan-zelle", istWochenende(t) ? "wochenende" : "", feiertage.has(t) ? "feiertag" : ""]
                             .filter(Boolean)
                             .join(" ");
@@ -833,8 +873,9 @@ export default function PlantafelPage() {
                           // normalen Schicht-Zeile als Konflikt markiert. Die einzelnen Badges
                           // bleiben dabei klickbar, damit der Planer den Konflikt direkt hier
                           // aufloesen kann (z. B. eine der beiden Zuweisungen loeschen).
-                          const konflikt = treffer.length > 1;
-                          const bereitschaften = zellenBereitschaften(pe.id, m.id, t);
+                          const konflikt = alleTreffer.length > 1;
+                          const bereitschaften =
+                            anzeigeFilter === "dienst" || anzeigeFilter === "abwesenheit" ? [] : zellenBereitschaften(pe.id, m.id, t);
                           return (
                             <td
                               key={t}
@@ -880,6 +921,14 @@ export default function PlantafelPage() {
                                       </span>
                                     );
                                   })
+                                ) : alleTreffer.length > 0 ? (
+                                  // Die Zelle hat tatsaechlich eine Zuweisung, die der Anzeige-Filter
+                                  // gerade ausblendet (z. B. "Nur Abwesenheiten" auf einer Zelle mit
+                                  // Dienst) -- das ist etwas anderes als eine wirklich freie Zelle,
+                                  // daher kein "frei" und kein Klick auf die Freischicht-Details.
+                                  <span className="zelle-ausgeblendet" title="Durch Anzeige-Filter ausgeblendet">
+                                    –
+                                  </span>
                                 ) : (
                                   (() => {
                                     const freiKommentare = freischichtKommentareFuer(pe.id, m.id, t);
