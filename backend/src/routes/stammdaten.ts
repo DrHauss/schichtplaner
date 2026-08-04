@@ -68,11 +68,19 @@ stammdatenRouter.delete("/feiertage/:id", (req: AuthedRequest, res) => {
 
 // Planungseinheiten
 stammdatenRouter.get("/planungseinheiten", (req: AuthedRequest, res) => {
+  // mitarbeiter_anzahl wird mitgeliefert, damit die Administration leere Teams (0 Mitglieder)
+  // erkennen und deren Loeschen anbieten kann, ohne je Team einen eigenen Request zu brauchen.
   const rows = req.user!.istAdmin
-    ? db.prepare("SELECT * FROM planungseinheit").all()
+    ? db
+        .prepare(
+          `SELECT p.*, (SELECT COUNT(*) FROM mitgliedschaft m WHERE m.planungseinheit_id = p.id) AS mitarbeiter_anzahl
+           FROM planungseinheit p`
+        )
+        .all()
     : db
         .prepare(
-          `SELECT DISTINCT p.* FROM planungseinheit p
+          `SELECT DISTINCT p.*, (SELECT COUNT(*) FROM mitgliedschaft m2 WHERE m2.planungseinheit_id = p.id) AS mitarbeiter_anzahl
+           FROM planungseinheit p
            JOIN mitgliedschaft m ON m.planungseinheit_id = p.id
            WHERE m.benutzer_id = ?`
         )
@@ -86,6 +94,23 @@ stammdatenRouter.post("/planungseinheiten", (req: AuthedRequest, res) => {
   if (!name) return res.status(400).json({ error: "name erforderlich" });
   const info = db.prepare("INSERT INTO planungseinheit (name, standort) VALUES (?,?)").run(name, standort ?? null);
   res.status(201).json({ id: info.lastInsertRowid, name, standort });
+});
+
+// Nur leere Teams (keine Mitgliedschaften) koennen geloescht werden -- alles andere, was sich auf
+// die Planungseinheit bezieht (Schichtblock-Vorlagen, Freischicht-Kommentare, Ausschreibung-
+// Verknuepfungen), haengt per ON DELETE CASCADE daran und wird automatisch mit entfernt.
+stammdatenRouter.delete("/planungseinheiten/:id", (req: AuthedRequest, res) => {
+  if (!req.user!.istAdmin) return res.status(403).json({ error: "Nur Administrator" });
+  const pe = db.prepare("SELECT id FROM planungseinheit WHERE id = ?").get(req.params.id);
+  if (!pe) return res.status(404).json({ error: "Team nicht gefunden" });
+  const { anzahl } = db
+    .prepare("SELECT COUNT(*) AS anzahl FROM mitgliedschaft WHERE planungseinheit_id = ?")
+    .get(req.params.id) as { anzahl: number };
+  if (anzahl > 0) {
+    return res.status(409).json({ error: "Team hat noch Mitglieder -- nur leere Teams können gelöscht werden" });
+  }
+  db.prepare("DELETE FROM planungseinheit WHERE id = ?").run(req.params.id);
+  res.json({ ok: true });
 });
 
 // Qualifikationen

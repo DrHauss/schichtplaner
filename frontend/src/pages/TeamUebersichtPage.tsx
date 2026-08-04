@@ -220,6 +220,7 @@ export default function TeamUebersichtPage() {
     const kopfzeile = ["", ...tage.map((t) => `${Number(t.slice(8, 10))}\n${wochentagKurz(t)}`)];
 
     doc.setFontSize(14);
+    doc.setTextColor(21, 50, 95);
     doc.text(`Team-Übersicht -- ${monatLabel}`, SEITENRAND_MM, 10);
     let naechsteStartY = 16;
 
@@ -229,6 +230,7 @@ export default function TeamUebersichtPage() {
         naechsteStartY = 12;
       }
       doc.setFontSize(11);
+      doc.setTextColor(21, 50, 95);
       doc.text(titel, SEITENRAND_MM, naechsteStartY);
       naechsteStartY += 4;
       const body = zeilen.map((z) => [z.label, ...z.zellen.map((c) => c.text)]);
@@ -245,7 +247,7 @@ export default function TeamUebersichtPage() {
         margin: { left: SEITENRAND_MM, right: SEITENRAND_MM, bottom: 12 },
         theme: "grid",
         styles: { fontSize: 5.5, cellPadding: 0.6, overflow: "linebreak", lineWidth: 0.1, valign: "middle", halign: "center" },
-        headStyles: { fillColor: [255, 255, 255], textColor: [30, 41, 59], fontSize: 5.5, halign: "center", fontStyle: "bold" },
+        headStyles: { fillColor: [255, 255, 255], textColor: [21, 50, 95], fontSize: 5.5, halign: "center", fontStyle: "bold" },
         columnStyles: { ...spaltenStile, 0: { ...spaltenStile[0], halign: "left" } },
         rowPageBreak: "avoid",
         didParseCell: (data) => {
@@ -344,7 +346,7 @@ export default function TeamUebersichtPage() {
       }
       doc.setFontSize(8.5);
       doc.setFont("helvetica", "bold");
-      doc.setTextColor(30, 41, 59);
+      doc.setTextColor(21, 50, 95);
       doc.text(titel, SEITENRAND_MM, naechsteStartY);
       doc.setFont("helvetica", "normal");
       naechsteStartY += 4;
@@ -353,7 +355,7 @@ export default function TeamUebersichtPage() {
         const y = naechsteStartY + Math.floor(i / spalten) * zeilenHoehe;
         e.zeichneMuster(x, y);
         doc.setFontSize(7.5);
-        doc.setTextColor(30, 41, 59);
+        doc.setTextColor(21, 50, 95);
         doc.text(e.text, x + e.chipBreite + 2, y);
       });
       naechsteStartY += zeilenAnzahl * zeilenHoehe + 2.5;
@@ -365,6 +367,7 @@ export default function TeamUebersichtPage() {
         naechsteStartY = 12;
       }
       doc.setFontSize(10);
+      doc.setTextColor(21, 50, 95);
       doc.text("Legende", SEITENRAND_MM, naechsteStartY);
       naechsteStartY += 5;
 

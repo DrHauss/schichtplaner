@@ -55,7 +55,7 @@ CREATE TABLE IF NOT EXISTS schichtart (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   kuerzel TEXT NOT NULL,
   bezeichnung TEXT NOT NULL,
-  farbe TEXT DEFAULT '#3b82f6',
+  farbe TEXT DEFAULT '#0073d0',
   beginn TEXT NOT NULL,
   ende TEXT NOT NULL,
   pause_min INTEGER DEFAULT 0,
@@ -71,7 +71,7 @@ CREATE TABLE IF NOT EXISTS bereitschaftsart (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   kuerzel TEXT NOT NULL,
   bezeichnung TEXT NOT NULL,
-  farbe TEXT DEFAULT '#a855f7',
+  farbe TEXT DEFAULT '#812cc4',
   archiviert INTEGER NOT NULL DEFAULT 0
 );
 
@@ -374,7 +374,7 @@ ensureColumn("schichtart", "archiviert", "INTEGER NOT NULL DEFAULT 0");
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       kuerzel TEXT NOT NULL,
       bezeichnung TEXT NOT NULL,
-      farbe TEXT DEFAULT '#3b82f6',
+      farbe TEXT DEFAULT '#0073d0',
       beginn TEXT NOT NULL,
       ende TEXT NOT NULL,
       pause_min INTEGER DEFAULT 0,
