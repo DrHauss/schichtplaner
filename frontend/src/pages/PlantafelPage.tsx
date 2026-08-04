@@ -201,6 +201,15 @@ export default function PlantafelPage() {
   const dragZeileRef = useRef<{ peId: number; benutzerId: number } | null>(null);
   const dragLetzterIndexRef = useRef<number | null>(null);
 
+  // Rechtsklick-Kontextmenue: wirkt auf die aktuell per Ziehen markierten Zellen (auch waehrend
+  // das Ziehen noch laeuft -- ein Rechtsklick bei gehaltener linker Maustaste beendet das Ziehen
+  // und oeffnet das Menue fuer die bis dahin erfasste Auswahl), oder falls keine (passende)
+  // Markierung vorliegt, nur auf die eine rechtsgeklickte Zelle.
+  const [kontextMenu, setKontextMenu] = useState<{ x: number; y: number; zellen: { peId: number; benutzerId: number; datum: string }[] } | null>(
+    null
+  );
+  const [kontextUntermenue, setKontextUntermenue] = useState<"dienst" | "abwesenheit" | "bereitschaft" | null>(null);
+
   async function load() {
     if (einheiten.length === 0) return;
     const von = tage[0];
@@ -454,12 +463,15 @@ export default function PlantafelPage() {
   }
 
   function zelleMouseDown(peId: number, benutzerId: number, datum: string) {
-    if (!werkzeug || busy) return;
-    if (werkzeug.art === "vorlage") {
+    if (busy) return;
+    if (werkzeug?.art === "vorlage") {
       // Eine Vorlage spannt bereits mehrere Tage auf -- kein Ziehen noetig, sofortige Zuweisung.
       zelleKlick(peId, benutzerId, datum);
       return;
     }
+    // Auch ohne aktives Werkzeug wird die Ziehbewegung erfasst -- eine so entstehende
+    // Mehrfachauswahl bleibt fuer einen anschliessenden Rechtsklick (Kontextmenue) markiert stehen,
+    // siehe beenden() unten.
     dragZellenRef.current = new Map();
     dragZeileRef.current = { peId, benutzerId };
     dragLetzterIndexRef.current = tage.indexOf(datum);
@@ -488,19 +500,105 @@ export default function PlantafelPage() {
     function beenden() {
       setDragAktiv(false);
       const zellen = Array.from(dragZellenRef.current.values());
-      dragZellenRef.current = new Map();
       dragZeileRef.current = null;
       dragLetzterIndexRef.current = null;
-      setDragTick((t) => t + 1);
-      if (zellen.length === 0 || !werkzeug) return;
-      if (werkzeug.art === "schichtart") batchZuweisen(zellen, werkzeug.schichtart.id);
-      else if (werkzeug.art === "bereitschaft") batchBereitschaftenZuweisen(zellen, werkzeug.bereitschaftsart.id);
-      else if (werkzeug.art === "radierer") radiererAusloesen(zellen);
+      if (werkzeug) {
+        dragZellenRef.current = new Map();
+        setDragTick((t) => t + 1);
+        if (zellen.length === 0) return;
+        if (werkzeug.art === "schichtart") batchZuweisen(zellen, werkzeug.schichtart.id);
+        else if (werkzeug.art === "bereitschaft") batchBereitschaftenZuweisen(zellen, werkzeug.bereitschaftsart.id);
+        else if (werkzeug.art === "radierer") radiererAusloesen(zellen);
+        return;
+      }
+      // Kein Werkzeug aktiv: eine echte Mehrfachauswahl (mind. 2 Zellen durch tatsaechliches
+      // Ziehen) bleibt markiert stehen, damit ein anschliessender Rechtsklick das Kontextmenue
+      // darauf anwenden kann (siehe zelleKontextMenu). Ein einzelner Klick ohne Ziehbewegung
+      // hinterlaesst dagegen keine Markierung, damit Klicks auf Kuerzel/Freischicht unveraendert
+      // sofort das Detailfenster oeffnen.
+      if (zellen.length <= 1) {
+        dragZellenRef.current = new Map();
+        setDragTick((t) => t + 1);
+      }
     }
     window.addEventListener("mouseup", beenden);
     return () => window.removeEventListener("mouseup", beenden);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dragAktiv]);
+
+  // Rechtsklick auf eine Zelle: wirkt auf die aktuell markierten Zellen, falls die rechtsgeklickte
+  // Zelle Teil einer laufenden/stehengebliebenen Mehrfachauswahl ist -- sonst nur auf diese eine
+  // Zelle (die dabei selbst als 1-Zellen-Auswahl markiert wird, damit sie waehrend das Menue
+  // offen ist sichtbar hervorgehoben bleibt).
+  function zelleKontextMenu(e: React.MouseEvent, peId: number, benutzerId: number, datum: string) {
+    if (busy) return;
+    e.preventDefault();
+    e.stopPropagation();
+    setDragAktiv(false);
+    dragZeileRef.current = null;
+    dragLetzterIndexRef.current = null;
+    let zellen = Array.from(dragZellenRef.current.values());
+    const gehoertZurAuswahl = zellen.some((z) => z.peId === peId && z.benutzerId === benutzerId && z.datum === datum);
+    if (zellen.length <= 1 || !gehoertZurAuswahl) {
+      zellen = [{ peId, benutzerId, datum }];
+      dragZellenRef.current = new Map([[`${peId}|${benutzerId}|${datum}`, zellen[0]]]);
+      setDragTick((t) => t + 1);
+    }
+    setKontextUntermenue(null);
+    setKontextMenu({ x: e.clientX, y: e.clientY, zellen });
+  }
+
+  function kontextMenuSchliessen() {
+    setKontextMenu(null);
+    setKontextUntermenue(null);
+    dragZellenRef.current = new Map();
+    setDragTick((t) => t + 1);
+  }
+
+  useEffect(() => {
+    if (!kontextMenu) return;
+    function beiEscape(e: KeyboardEvent) {
+      if (e.key === "Escape") kontextMenuSchliessen();
+    }
+    window.addEventListener("keydown", beiEscape);
+    return () => window.removeEventListener("keydown", beiEscape);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kontextMenu]);
+
+  async function kontextDienstLoeschen() {
+    if (!kontextMenu) return;
+    const zellen = kontextMenu.zellen;
+    kontextMenuSchliessen();
+    setBusy(true);
+    for (const z of gesammelteZuweisungen(zellen)) {
+      await api(`/zuweisungen/${z.id}?kommentareBehalten=1&planungseinheitId=${z.peId}`, { method: "DELETE" });
+    }
+    setBusy(false);
+    load();
+  }
+
+  function kontextSchichtartWaehlen(schichtartId: number) {
+    if (!kontextMenu) return;
+    const zellen = kontextMenu.zellen;
+    kontextMenuSchliessen();
+    batchZuweisen(zellen, schichtartId);
+  }
+
+  function kontextBereitschaftsartWaehlen(bereitschaftsartId: number) {
+    if (!kontextMenu) return;
+    const zellen = kontextMenu.zellen;
+    kontextMenuSchliessen();
+    batchBereitschaftenZuweisen(zellen, bereitschaftsartId);
+  }
+
+  function kontextKommentarEingeben() {
+    if (!kontextMenu || kontextMenu.zellen.length !== 1) return;
+    const zelle = kontextMenu.zellen[0];
+    kontextMenuSchliessen();
+    const treffer = zellenZuweisungen(zelle.peId, zelle.benutzerId, zelle.datum);
+    if (treffer.length > 0) setDetailId(treffer[0].id);
+    else setFreischichtDetail({ peId: zelle.peId, benutzerId: zelle.benutzerId, datum: zelle.datum });
+  }
 
   function badgeKlick(z: Zuweisung) {
     if (busy || werkzeug) return; // mit aktivem Werkzeug uebernimmt Ziehen/Klick auf die Zelle
@@ -723,8 +821,15 @@ export default function PlantafelPage() {
                             <td
                               key={t}
                               className={`${klassen}${wirdGezogen ? " ziehen-markiert" : ""}`}
-                              onMouseDown={() => zelleMouseDown(pe.id, m.id, t)}
+                              onMouseDown={(e) => {
+                                // Nur die linke Maustaste startet/erweitert eine Ziehauswahl -- ein
+                                // Rechtsklick (button 2) feuert ebenfalls ein mousedown-Event, das
+                                // sonst die fuer das Kontextmenue vorgesehene Markierung ueberschreiben wuerde.
+                                if (e.button !== 0) return;
+                                zelleMouseDown(pe.id, m.id, t);
+                              }}
                               onMouseEnter={() => zelleMouseEnter(pe.id, m.id, t)}
+                              onContextMenu={(e) => zelleKontextMenu(e, pe.id, m.id, t)}
                             >
                               <div className={`zelle-schicht-zeile${konflikt ? " zelle-konflikt" : ""}`} title={konflikt ? "Mehrere Schichten am selben Tag!" : undefined}>
                                 {treffer.length > 0 ? (
@@ -739,6 +844,7 @@ export default function PlantafelPage() {
                                         style={{ background: sa.farbe, color: kontrastfarbe(sa.farbe) }}
                                         title={`${sa.bezeichnung} (${z.status})${anzahlKommentare > 0 ? ` · ${anzahlKommentare} Kommentar(e)` : ""}`}
                                         onMouseDown={(e) => {
+                                          if (e.button !== 0) return;
                                           e.stopPropagation();
                                           zelleMouseDown(pe.id, z.benutzer_id, z.datum);
                                         }}
@@ -787,6 +893,7 @@ export default function PlantafelPage() {
                                         style={{ background: ba.farbe, color: kontrastfarbe(ba.farbe) }}
                                         title={ba.bezeichnung}
                                         onMouseDown={(e) => {
+                                          if (e.button !== 0) return;
                                           e.stopPropagation();
                                           zelleMouseDown(pe.id, b.benutzer_id, b.datum);
                                         }}
@@ -861,6 +968,117 @@ export default function PlantafelPage() {
           onAlle={radiererAlleLoeschen}
           onAbbrechen={() => setRadiererAuswahl(null)}
         />
+      )}
+
+      {kontextMenu && (
+        <>
+          <div className="popover-backdrop" onClick={kontextMenuSchliessen} onContextMenu={(e) => { e.preventDefault(); kontextMenuSchliessen(); }} />
+          <PlantafelKontextMenu
+            x={kontextMenu.x}
+            y={kontextMenu.y}
+            einzelneZelle={kontextMenu.zellen.length === 1}
+            dienste={nachDienstUndAbwesenheitGruppiert(schichtarten.filter((sa) => !sa.archiviert)).dienst}
+            abwesenheiten={nachDienstUndAbwesenheitGruppiert(schichtarten.filter((sa) => !sa.archiviert)).abwesenheit}
+            bereitschaftsarten={[...bereitschaftsarten.filter((ba) => !ba.archiviert)].sort((a, b) => a.bezeichnung.localeCompare(b.bezeichnung, "de"))}
+            offenesUntermenue={kontextUntermenue}
+            onUntermenueOeffnen={setKontextUntermenue}
+            onAbbrechen={kontextMenuSchliessen}
+            onDienstLoeschen={kontextDienstLoeschen}
+            onSchichtartWaehlen={kontextSchichtartWaehlen}
+            onBereitschaftsartWaehlen={kontextBereitschaftsartWaehlen}
+            onKommentarEingeben={kontextKommentarEingeben}
+          />
+        </>
+      )}
+    </div>
+  );
+}
+
+// Rechtsklick-Kontextmenue der Plantafel (Vorlage: gaengige Dienstplan-Software) -- wirkt auf eine
+// zuvor per Ziehen markierte Mehrfachauswahl oder auf die eine rechtsgeklickte Zelle. "Kommentar
+// eingeben" ist bewusst nur bei genau einer Zelle sichtbar, da ein Kommentar an genau eine
+// Zuweisung/Freischicht haengt und sich nicht sinnvoll auf mehrere Zellen zugleich anwenden laesst.
+function PlantafelKontextMenu({
+  x,
+  y,
+  einzelneZelle,
+  dienste,
+  abwesenheiten,
+  bereitschaftsarten,
+  offenesUntermenue,
+  onUntermenueOeffnen,
+  onAbbrechen,
+  onDienstLoeschen,
+  onSchichtartWaehlen,
+  onBereitschaftsartWaehlen,
+  onKommentarEingeben,
+}: {
+  x: number;
+  y: number;
+  einzelneZelle: boolean;
+  dienste: Schichtart[];
+  abwesenheiten: Schichtart[];
+  bereitschaftsarten: Bereitschaftsart[];
+  offenesUntermenue: "dienst" | "abwesenheit" | "bereitschaft" | null;
+  onUntermenueOeffnen: (u: "dienst" | "abwesenheit" | "bereitschaft" | null) => void;
+  onAbbrechen: () => void;
+  onDienstLoeschen: () => void;
+  onSchichtartWaehlen: (id: number) => void;
+  onBereitschaftsartWaehlen: (id: number) => void;
+  onKommentarEingeben: () => void;
+}) {
+  // Grobe Bildschirmrand-Begrenzung, damit das Menue nicht ueber den rechten/unteren Rand
+  // hinausragt -- die genaue Menuegroesse haengt vom Inhalt ab, daher nur eine grosszuegige Schaetzung.
+  const breite = 240;
+  const hoeheGeschaetzt = 40 + (einzelneZelle ? 40 : 0);
+  const links = Math.min(x, window.innerWidth - breite - 8);
+  const oben = Math.min(y, window.innerHeight - hoeheGeschaetzt - 8);
+
+  function untermenueEintraege<T extends { id: number; kuerzel: string; bezeichnung: string; farbe: string }>(
+    liste: T[],
+    onWaehlen: (id: number) => void
+  ) {
+    if (liste.length === 0) return <span className="empty kontextmenue-leer">Keine aktiven Einträge.</span>;
+    return liste.map((eintrag) => (
+      <button key={eintrag.id} type="button" className="kontextmenue-untereintrag" onClick={() => onWaehlen(eintrag.id)}>
+        <span className="kontextmenue-farbpunkt" style={{ background: eintrag.farbe }} />
+        {eintrag.kuerzel} – {eintrag.bezeichnung}
+      </button>
+    ));
+  }
+
+  return (
+    <div className="kontextmenue" style={{ left: links, top: oben }} onClick={(e) => e.stopPropagation()}>
+      <button type="button" className="kontextmenue-eintrag" onMouseEnter={() => onUntermenueOeffnen(null)} onClick={onAbbrechen}>
+        Abbrechen
+      </button>
+      <div className="kontextmenue-trenner" />
+      <button type="button" className="kontextmenue-eintrag" onMouseEnter={() => onUntermenueOeffnen(null)} onClick={onDienstLoeschen}>
+        Dienst löschen
+      </button>
+      <div className="kontextmenue-eintrag kontextmenue-untermenue" onMouseEnter={() => onUntermenueOeffnen("dienst")}>
+        Dienst eintragen <span className="kontextmenue-pfeil">▸</span>
+        {offenesUntermenue === "dienst" && <div className="kontextmenue-unterliste">{untermenueEintraege(dienste, onSchichtartWaehlen)}</div>}
+      </div>
+      <div className="kontextmenue-eintrag kontextmenue-untermenue" onMouseEnter={() => onUntermenueOeffnen("abwesenheit")}>
+        Abwesenheit eintragen <span className="kontextmenue-pfeil">▸</span>
+        {offenesUntermenue === "abwesenheit" && (
+          <div className="kontextmenue-unterliste">{untermenueEintraege(abwesenheiten, onSchichtartWaehlen)}</div>
+        )}
+      </div>
+      <div className="kontextmenue-eintrag kontextmenue-untermenue" onMouseEnter={() => onUntermenueOeffnen("bereitschaft")}>
+        Bereitschaft eintragen <span className="kontextmenue-pfeil">▸</span>
+        {offenesUntermenue === "bereitschaft" && (
+          <div className="kontextmenue-unterliste">{untermenueEintraege(bereitschaftsarten, onBereitschaftsartWaehlen)}</div>
+        )}
+      </div>
+      {einzelneZelle && (
+        <>
+          <div className="kontextmenue-trenner" />
+          <button type="button" className="kontextmenue-eintrag" onMouseEnter={() => onUntermenueOeffnen(null)} onClick={onKommentarEingeben}>
+            Kommentar eingeben…
+          </button>
+        </>
       )}
     </div>
   );
