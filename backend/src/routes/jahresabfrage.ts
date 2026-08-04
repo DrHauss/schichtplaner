@@ -318,7 +318,10 @@ jahresabfrageRouter.get("/ausschreibungen/:id/raster", (req: AuthedRequest, res)
   if (!ausschreibung) return res.status(404).json({ error: "Nicht gefunden" });
   const istPlaner = istPlanerFuerAusschreibung(req, req.params.id);
   const raster = baueRaster(req.params.id, { requesterBenutzerId: req.user!.sub, istPlaner });
-  res.json(raster);
+  // Der Frontend kann istPlaner nicht mehr selbst aus ausschreibung.planungseinheit_id ableiten,
+  // seit Ausschreibungen nicht mehr an genau eine Planungseinheit gebunden sind -- daher hier
+  // explizit mitgeben.
+  res.json({ ...raster, istPlaner });
 });
 
 jahresabfrageRouter.put("/ausschreibungen/:id/antworten", (req: AuthedRequest, res) => {

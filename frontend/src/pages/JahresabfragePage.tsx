@@ -15,7 +15,6 @@ import { formatDatum, formatDatumZeit, parseDatum } from "../lib/datum";
 interface Ausschreibung {
   id: number;
   titel: string;
-  planungseinheit_id: number;
   zeitraum_von: string;
   zeitraum_bis: string;
   bewerbungsfrist: string;
@@ -28,6 +27,9 @@ interface RasterResponse {
   spalten: RasterSpalte[];
   zeilen: RasterZeile[];
   summen: RasterSummen;
+  // Ausschreibungen sind nicht mehr an genau eine Planungseinheit gebunden (siehe
+  // ausschreibung_team) -- ob der Nutzer Planer ist, liefert der Server daher direkt mit.
+  istPlaner: boolean;
 }
 
 interface Schichtart {
@@ -129,13 +131,12 @@ function MindestzusagenTabelle({ uebersicht, onAendern }: { uebersicht: Uebersic
 
 export default function JahresabfragePage() {
   const { id } = useParams();
-  const { mitgliedschaften, user } = useAuth();
+  const { user } = useAuth();
   const [raster, setRaster] = useState<RasterResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>("raster");
 
-  const peId = raster?.ausschreibung.planungseinheit_id ?? null;
-  const istPlaner = peId != null && (user?.istAdmin || mitgliedschaften.some((m) => m.rolle === "planer" && m.planungseinheit_id === peId));
+  const istPlaner = raster?.istPlaner ?? false;
 
   function ladeRaster() {
     api<RasterResponse>(`/ausschreibungen/${id}/raster`)
@@ -192,7 +193,7 @@ export default function JahresabfragePage() {
       )}
 
       {istPlaner && tab === "raster" && <RasterMatrix spalten={raster.spalten} zeilen={raster.zeilen} summen={raster.summen} />}
-      {istPlaner && tab === "generator" && <GeneratorTab ausschreibungId={Number(id)} peId={peId!} onErzeugt={ladeRaster} />}
+      {istPlaner && tab === "generator" && <GeneratorTab ausschreibungId={Number(id)} onErzeugt={ladeRaster} />}
       {istPlaner && tab === "teilnehmer" && <TeilnehmerTab ausschreibungId={Number(id)} onGeaendert={ladeRaster} />}
       {istPlaner && tab === "fortschritt" && <FortschrittTab ausschreibungId={Number(id)} />}
       {istPlaner && tab === "vergabe" && <VergabeTab ausschreibungId={Number(id)} onVergeben={ladeRaster} />}
@@ -219,7 +220,7 @@ export default function JahresabfragePage() {
   );
 }
 
-function GeneratorTab({ ausschreibungId, peId, onErzeugt }: { ausschreibungId: number; peId: number; onErzeugt: () => void }) {
+function GeneratorTab({ ausschreibungId, onErzeugt }: { ausschreibungId: number; onErzeugt: () => void }) {
   const [schichtarten, setSchichtarten] = useState<Schichtart[]>([]);
   const [bereitschaftsarten, setBereitschaftsarten] = useState<Bereitschaftsart[]>([]);
   const [serien, setSerien] = useState<Terminserie[]>([]);
@@ -272,7 +273,7 @@ function GeneratorTab({ ausschreibungId, peId, onErzeugt }: { ausschreibungId: n
     });
     ladeSerien();
     ladeGruppen();
-  }, [peId]);
+  }, [ausschreibungId]);
 
   function regelPayload() {
     if (typ === "einzeln") {
