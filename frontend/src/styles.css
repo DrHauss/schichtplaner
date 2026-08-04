@@ -189,7 +189,7 @@ body {
    unterschiedlichen, "springenden" Spaltenbreiten fuehrt. */
 .uebersicht-monat-scroll { overflow-x: auto; margin-bottom: 1rem; }
 .uebersicht-monat { table-layout: fixed; width: auto; white-space: nowrap; font-size: 0.78rem; }
-.uebersicht-monat th, .uebersicht-monat td { padding: 0.2rem 0.3rem; text-align: center; width: 2.1rem; overflow: hidden; text-overflow: ellipsis; }
+.uebersicht-monat th, .uebersicht-monat td { padding: 0.15rem 0.2rem; text-align: center; width: 2.7rem; overflow: hidden; text-overflow: ellipsis; }
 .uebersicht-monat th:first-child, .uebersicht-monat td:first-child {
   text-align: left;
   position: sticky;
@@ -198,6 +198,16 @@ body {
   z-index: 1;
   width: 9rem;
 }
+/* Kuerzel koennen bis zu 4 Zeichen lang sein (z. B. "F-WE", "MAGZ") -- die Badges selbst muessen
+   innerhalb der festen Spaltenbreite trunkieren, sonst wuerden sie beim Ueberlaufen der Zelle
+   hart (nicht als sauberes "...") abgeschnitten. */
+.uebersicht-monat .badge, .uebersicht-monat .freischicht-hinweis {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+}
 .uebersicht-monat .tag-nr { font-weight: 600; line-height: 1.1; }
 .uebersicht-monat .tag-wt { font-weight: 400; color: #64748b; font-size: 0.68rem; line-height: 1.1; }
 .uebersicht-monat th.wochenende, .uebersicht-monat td.wochenende { background: #f1f5f9; }
@@ -205,6 +215,8 @@ body {
 .uebersicht-monat th.feiertag.wochenende, .uebersicht-monat td.feiertag.wochenende { background: #fde68a; }
 .uebersicht-monat .badge { font-size: 0.68rem; padding: 0.05rem 0.25rem; }
 .uebersicht-monat .freischicht-hinweis { font-size: 0.68rem; }
+.uebersicht-legende { display: flex; flex-wrap: wrap; gap: 0.6rem 1.2rem; }
+.uebersicht-legende-eintrag { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; }
 
 /* Rasteransicht (Jahresabfrage) */
 .raster-scroll { overflow-x: auto; }
@@ -240,23 +252,6 @@ body {
 .abfrage-token-page { max-width: 640px; margin: 0 auto; padding: 1.5rem; }
 .abfrage-token-kopf { margin-bottom: 1.5rem; }
 .abfrage-token-kopf .brand { font-weight: 700; color: #2563eb; margin-bottom: 0.5rem; }
-
-/* PDF-Export der Team-Uebersicht ueber den Browser-Druckdialog ("Als PDF speichern"): Navigation,
-   Toolbar und Hinweistexte werden ausgeblendet, jeder Team-/Bereitschafts-Abschnitt bleibt
-   zusammenhaengend auf einer Seite, und die Tages-Spalten werden schmaler skaliert, damit ein
-   ganzer Monat auf eine A4-Querseite passt. */
-@media print {
-  /* p.hint (Erklaertexte) ausblenden, aber NICHT das inline span.hint mit dem Standort neben dem
-     Team-Namen (h2) -- der gehoert inhaltlich zur Ueberschrift, nicht zu den UI-Hinweisen. */
-  .topbar, .toolbar, .page > p.hint, section > p.hint { display: none !important; }
-  .page { padding: 0; }
-  .uebersicht-monat-scroll { overflow: visible !important; }
-  .uebersicht-monat { font-size: 0.62rem; }
-  .uebersicht-monat th, .uebersicht-monat td { width: 1.5rem; padding: 0.1rem 0.15rem; }
-  .uebersicht-monat th:first-child, .uebersicht-monat td:first-child { width: 6.5rem; position: static; }
-  section { break-inside: avoid; page-break-inside: avoid; }
-  @page { size: landscape; margin: 10mm; }
-}
 
 @media (max-width: 720px) {
   .raster-matrix { font-size: 0.85rem; }

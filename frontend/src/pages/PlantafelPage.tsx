@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, Konflikt } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import { formatDatum, formatDatumZeit } from "../lib/datum";
+import { kontrastfarbe } from "../lib/farbe";
 
 interface Mitarbeiter {
   id: number;
@@ -547,7 +548,7 @@ export default function PlantafelPage() {
                 key={sa.id}
                 type="button"
                 className={`palette-item${werkzeug?.art === "schichtart" && werkzeug.schichtart.id === sa.id ? " aktiv" : ""}`}
-                style={{ background: sa.farbe, color: "white" }}
+                style={{ background: sa.farbe, color: kontrastfarbe(sa.farbe) }}
                 title={sa.bezeichnung}
                 onClick={() => setWerkzeug({ art: "schichtart", schichtart: sa })}
               >
@@ -583,7 +584,7 @@ export default function PlantafelPage() {
                 key={ba.id}
                 type="button"
                 className={`palette-item${werkzeug?.art === "bereitschaft" && werkzeug.bereitschaftsart.id === ba.id ? " aktiv" : ""}`}
-                style={{ background: ba.farbe, color: "white" }}
+                style={{ background: ba.farbe, color: kontrastfarbe(ba.farbe) }}
                 title={ba.bezeichnung}
                 onClick={() => setWerkzeug({ art: "bereitschaft", bereitschaftsart: ba })}
               >
@@ -703,7 +704,7 @@ export default function PlantafelPage() {
                                     <span
                                       key={z.id}
                                       className={`badge${z.status === "entwurf" ? " badge-entwurf" : ""}`}
-                                      style={{ background: sa.farbe }}
+                                      style={{ background: sa.farbe, color: kontrastfarbe(sa.farbe) }}
                                       title={`${sa.bezeichnung} (${z.status})${anzahlKommentare > 0 ? ` · ${anzahlKommentare} Kommentar(e)` : ""}`}
                                       onMouseDown={(e) => {
                                         e.stopPropagation();
@@ -748,7 +749,7 @@ export default function PlantafelPage() {
                                   <span
                                     key={b.id}
                                     className="bereitschaft-chip"
-                                    style={{ background: ba.farbe }}
+                                    style={{ background: ba.farbe, color: kontrastfarbe(ba.farbe) }}
                                     title={ba.bezeichnung}
                                     onMouseDown={(e) => {
                                       e.stopPropagation();
@@ -879,7 +880,7 @@ function ZuweisungDetail({
         <div className="popover-kopf">
           <div>
             {schichtart && (
-              <span className="badge" style={{ background: schichtart.farbe }}>
+              <span className="badge" style={{ background: schichtart.farbe, color: kontrastfarbe(schichtart.farbe) }}>
                 {schichtart.kuerzel}
               </span>
             )}{" "}
