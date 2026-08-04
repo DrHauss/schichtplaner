@@ -303,42 +303,60 @@ export default function TeamUebersichtPage() {
       );
     }
 
+    // Ein Legenden-Eintrag ist immer ein farbiger Kuerzel-Chip (Kuerzel steht IN der Box, wie in
+    // den Team-Tabellen selbst) gefolgt vom Klartext -- fuer Bereitschaften ohne eigene Farbe wird
+    // ein neutraler grauer Chip verwendet. Chip-Breite richtet sich nach der Laenge des jeweiligen
+    // Kuerzels (z. B. "T" schmaler als "MAGZ"), damit kurze Kuerzel keinen unnoetigen Leerraum
+    // erzeugen.
+    function legendeChip(kuerzel: string, farbe: string | undefined, text: string) {
+      const chipBreite = Math.max(doc.getTextWidth(kuerzel) + 3, 6.5);
+      return {
+        text,
+        chipBreite,
+        zeichneMuster: (x: number, y: number) => {
+          const rgb = farbe ? hexZuRgb(farbe) ?? [148, 163, 184] : [226, 232, 240];
+          doc.setFillColor(rgb[0], rgb[1], rgb[2]);
+          doc.roundedRect(x, y - 3.1, chipBreite, 4, 0.9, 0.9, "F");
+          const textRgb = farbe ? hexZuRgb(kontrastfarbe(farbe)) ?? [255, 255, 255] : [71, 85, 105];
+          doc.setFontSize(6.3);
+          doc.setTextColor(textRgb[0], textRgb[1], textRgb[2]);
+          doc.text(kuerzel, x + chipBreite / 2, y - 0.2, { align: "center" });
+        },
+      };
+    }
+
     // Zeichnet eine Legenden-Gruppe (Ueberschrift + Eintraege) als echtes Raster mit fester
     // Spaltenzahl statt einer ragged Zeilenumbruch-Liste -- dadurch bleiben die Eintraege sauber
-    // untereinander ausgerichtet und die Gruppe nimmt insgesamt weniger Platz ein. Die
-    // Spaltenbreite richtet sich nach dem laengsten Eintrag der jeweiligen Gruppe, sodass kurze
-    // Bereitschafts-Namen dichter gepackt werden als laengere Schichtart-Bezeichnungen.
-    function zeichneLegendeGruppe(
-      titel: string,
-      musterBreite: number,
-      eintraege: { text: string; zeichneMuster: (x: number, y: number) => void }[]
-    ) {
+    // untereinander ausgerichtet und die Gruppe nimmt insgesamt weniger Platz ein.
+    function zeichneLegendeGruppe(titel: string, eintraege: { text: string; chipBreite: number; zeichneMuster: (x: number, y: number) => void }[]) {
       if (eintraege.length === 0) return;
+      const maxChipBreite = Math.max(...eintraege.map((e) => e.chipBreite));
       const maxTextBreite = Math.max(...eintraege.map((e) => doc.getTextWidth(e.text)));
-      const spaltenBreite = musterBreite + maxTextBreite + 6;
+      const spaltenBreite = maxChipBreite + 2 + maxTextBreite + 5;
       const nutzbareBreite = doc.internal.pageSize.getWidth() - 2 * SEITENRAND_MM;
-      const spalten = Math.max(1, Math.min(6, Math.floor(nutzbareBreite / spaltenBreite)));
+      const spalten = Math.max(1, Math.min(8, Math.floor(nutzbareBreite / spaltenBreite)));
       const zeilenAnzahl = Math.ceil(eintraege.length / spalten);
-      const benoetigteHoehe = 4.5 + zeilenAnzahl * 5 + 4;
+      const zeilenHoehe = 4.3;
+      const benoetigteHoehe = 4 + zeilenAnzahl * zeilenHoehe + 2.5;
       if (naechsteStartY + benoetigteHoehe > seitenHoehe - 8) {
         doc.addPage();
         naechsteStartY = 12;
       }
-      doc.setFontSize(9);
+      doc.setFontSize(8.5);
       doc.setFont("helvetica", "bold");
       doc.setTextColor(30, 41, 59);
       doc.text(titel, SEITENRAND_MM, naechsteStartY);
       doc.setFont("helvetica", "normal");
-      naechsteStartY += 4.5;
+      naechsteStartY += 4;
       eintraege.forEach((e, i) => {
         const x = SEITENRAND_MM + (i % spalten) * spaltenBreite;
-        const y = naechsteStartY + Math.floor(i / spalten) * 5;
+        const y = naechsteStartY + Math.floor(i / spalten) * zeilenHoehe;
         e.zeichneMuster(x, y);
-        doc.setFontSize(8);
+        doc.setFontSize(7.5);
         doc.setTextColor(30, 41, 59);
-        doc.text(e.text, x + musterBreite, y);
+        doc.text(e.text, x + e.chipBreite + 2, y);
       });
-      naechsteStartY += zeilenAnzahl * 5 + 4;
+      naechsteStartY += zeilenAnzahl * zeilenHoehe + 2.5;
     }
 
     if (schichtartenListe.length > 0 || bereitschaftInitialenListe.length > 0) {
@@ -346,39 +364,17 @@ export default function TeamUebersichtPage() {
         doc.addPage();
         naechsteStartY = 12;
       }
-      doc.setFontSize(11);
+      doc.setFontSize(10);
       doc.text("Legende", SEITENRAND_MM, naechsteStartY);
-      naechsteStartY += 6;
+      naechsteStartY += 5;
 
       zeichneLegendeGruppe(
         "Schichtarten",
-        6,
-        schichtartenListe.map((s) => ({
-          text: `${s.kuerzel} ${s.bezeichnung}`,
-          zeichneMuster: (x, y) => {
-            const rgb = hexZuRgb(s.farbe) ?? [148, 163, 184];
-            doc.setFillColor(rgb[0], rgb[1], rgb[2]);
-            doc.roundedRect(x, y - 3.2, 4, 4, 0.8, 0.8, "F");
-          },
-        }))
+        schichtartenListe.map((s) => legendeChip(s.kuerzel, s.farbe, s.bezeichnung))
       );
-
-      // Initialen-Chip statt reinem Text -- optische Entsprechung zum Farbmuster der
-      // Schichtarten-Gruppe, macht die Bereitschafts-Kuerzel selbst als eigenstaendiges,
-      // wiedererkennbares Element sichtbar statt sie nur im Fliesstext mitlaufen zu lassen.
       zeichneLegendeGruppe(
         "Bereitschaften",
-        11,
-        bereitschaftInitialenListe.map((b) => ({
-          text: b.name,
-          zeichneMuster: (x, y) => {
-            doc.setFillColor(226, 232, 240);
-            doc.roundedRect(x, y - 3.4, 9, 4.4, 1, 1, "F");
-            doc.setFontSize(6.5);
-            doc.setTextColor(71, 85, 105);
-            doc.text(b.initialen, x + 4.5, y - 0.4, { align: "center" });
-          },
-        }))
+        bereitschaftInitialenListe.map((b) => legendeChip(b.initialen, undefined, b.name))
       );
     }
 
