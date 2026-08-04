@@ -688,6 +688,14 @@ export default function PlantafelPage() {
                             .filter(Boolean)
                             .join(" ");
                           const wirdGezogen = dragZellenRef.current.has(`${pe.id}|${m.id}|${t}`);
+                          // Pro Tag soll ein Mitarbeiter nur eine Schicht haben -- mehrere
+                          // Zuweisungen am selben Tag sind ein Datenfehler (z. B. durch eine
+                          // Schichtboersen-Vergabe ohne Konfliktpruefung) und werden zusaetzlich zur
+                          // normalen Schicht-Zeile als Konflikt markiert. Die einzelnen Badges
+                          // bleiben dabei klickbar, damit der Planer den Konflikt direkt hier
+                          // aufloesen kann (z. B. eine der beiden Zuweisungen loeschen).
+                          const konflikt = treffer.length > 1;
+                          const bereitschaften = zellenBereitschaften(pe.id, m.id, t);
                           return (
                             <td
                               key={t}
@@ -695,75 +703,81 @@ export default function PlantafelPage() {
                               onMouseDown={() => zelleMouseDown(pe.id, m.id, t)}
                               onMouseEnter={() => zelleMouseEnter(pe.id, m.id, t)}
                             >
-                              {treffer.length > 0 ? (
-                                treffer.map((z) => {
-                                  const sa = schichtarten.find((s) => s.id === z.schichtart_id);
-                                  if (!sa) return null;
-                                  const anzahlKommentare = kommentareFuer(pe.id, z.id).length;
-                                  return (
-                                    <span
-                                      key={z.id}
-                                      className={`badge${z.status === "entwurf" ? " badge-entwurf" : ""}`}
-                                      style={{ background: sa.farbe, color: kontrastfarbe(sa.farbe) }}
-                                      title={`${sa.bezeichnung} (${z.status})${anzahlKommentare > 0 ? ` · ${anzahlKommentare} Kommentar(e)` : ""}`}
-                                      onMouseDown={(e) => {
-                                        e.stopPropagation();
-                                        zelleMouseDown(pe.id, z.benutzer_id, z.datum);
-                                      }}
-                                      onMouseEnter={(e) => {
-                                        e.stopPropagation();
-                                        zelleMouseEnter(pe.id, z.benutzer_id, z.datum);
-                                      }}
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        badgeKlick(z);
-                                      }}
-                                    >
-                                      {sa.kuerzel}
-                                      {anzahlKommentare > 0 && <span className="kommentar-marker" />}
-                                    </span>
-                                  );
-                                })
-                              ) : (
-                                (() => {
-                                  const freiKommentare = freischichtKommentareFuer(pe.id, m.id, t);
-                                  return (
-                                    <span
-                                      className="freischicht-hinweis"
-                                      title={freiKommentare.length > 0 ? `${freiKommentare.length} Kommentar(e)` : undefined}
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        freiKlick(pe.id, m.id, t);
-                                      }}
-                                    >
-                                      frei
-                                      {freiKommentare.length > 0 && <span className="kommentar-marker" />}
-                                    </span>
-                                  );
-                                })()
+                              <div className={`zelle-schicht-zeile${konflikt ? " zelle-konflikt" : ""}`} title={konflikt ? "Mehrere Schichten am selben Tag!" : undefined}>
+                                {treffer.length > 0 ? (
+                                  treffer.map((z) => {
+                                    const sa = schichtarten.find((s) => s.id === z.schichtart_id);
+                                    if (!sa) return null;
+                                    const anzahlKommentare = kommentareFuer(pe.id, z.id).length;
+                                    return (
+                                      <span
+                                        key={z.id}
+                                        className={`badge${z.status === "entwurf" ? " badge-entwurf" : ""}`}
+                                        style={{ background: sa.farbe, color: kontrastfarbe(sa.farbe) }}
+                                        title={`${sa.bezeichnung} (${z.status})${anzahlKommentare > 0 ? ` · ${anzahlKommentare} Kommentar(e)` : ""}`}
+                                        onMouseDown={(e) => {
+                                          e.stopPropagation();
+                                          zelleMouseDown(pe.id, z.benutzer_id, z.datum);
+                                        }}
+                                        onMouseEnter={(e) => {
+                                          e.stopPropagation();
+                                          zelleMouseEnter(pe.id, z.benutzer_id, z.datum);
+                                        }}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          badgeKlick(z);
+                                        }}
+                                      >
+                                        {sa.kuerzel}
+                                        {anzahlKommentare > 0 && <span className="kommentar-marker" />}
+                                      </span>
+                                    );
+                                  })
+                                ) : (
+                                  (() => {
+                                    const freiKommentare = freischichtKommentareFuer(pe.id, m.id, t);
+                                    return (
+                                      <span
+                                        className="freischicht-hinweis"
+                                        title={freiKommentare.length > 0 ? `${freiKommentare.length} Kommentar(e)` : undefined}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          freiKlick(pe.id, m.id, t);
+                                        }}
+                                      >
+                                        frei
+                                        {freiKommentare.length > 0 && <span className="kommentar-marker" />}
+                                      </span>
+                                    );
+                                  })()
+                                )}
+                              </div>
+                              {bereitschaften.length > 0 && (
+                                <div className="zelle-bereitschaft-zeile">
+                                  {bereitschaften.map((b) => {
+                                    const ba = bereitschaftsarten.find((x) => x.id === b.bereitschaftsart_id);
+                                    if (!ba) return null;
+                                    return (
+                                      <span
+                                        key={b.id}
+                                        className="bereitschaft-chip"
+                                        style={{ background: ba.farbe, color: kontrastfarbe(ba.farbe) }}
+                                        title={ba.bezeichnung}
+                                        onMouseDown={(e) => {
+                                          e.stopPropagation();
+                                          zelleMouseDown(pe.id, b.benutzer_id, b.datum);
+                                        }}
+                                        onMouseEnter={(e) => {
+                                          e.stopPropagation();
+                                          zelleMouseEnter(pe.id, b.benutzer_id, b.datum);
+                                        }}
+                                      >
+                                        {ba.kuerzel}
+                                      </span>
+                                    );
+                                  })}
+                                </div>
                               )}
-                              {zellenBereitschaften(pe.id, m.id, t).map((b) => {
-                                const ba = bereitschaftsarten.find((x) => x.id === b.bereitschaftsart_id);
-                                if (!ba) return null;
-                                return (
-                                  <span
-                                    key={b.id}
-                                    className="bereitschaft-chip"
-                                    style={{ background: ba.farbe, color: kontrastfarbe(ba.farbe) }}
-                                    title={ba.bezeichnung}
-                                    onMouseDown={(e) => {
-                                      e.stopPropagation();
-                                      zelleMouseDown(pe.id, b.benutzer_id, b.datum);
-                                    }}
-                                    onMouseEnter={(e) => {
-                                      e.stopPropagation();
-                                      zelleMouseEnter(pe.id, b.benutzer_id, b.datum);
-                                    }}
-                                  >
-                                    {ba.kuerzel}
-                                  </span>
-                                );
-                              })}
                             </td>
                           );
                         })}

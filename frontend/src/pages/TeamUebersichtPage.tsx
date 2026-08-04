@@ -224,8 +224,24 @@ export default function TeamUebersichtPage() {
     doc.text(`Team-Übersicht -- ${monatLabel}`, SEITENRAND_MM, 10);
     let naechsteStartY = 16;
 
+    // Geschaetzte Gesamthoehe des Abschnitts (Titel + zweizeiliger Kopf + eine Zeile je
+    // Mitarbeiter/Bereitschaftsart), damit VOR dem Zeichnen entschieden werden kann, ob ein
+    // Seitenumbruch noetig ist -- sonst wuerde autoTable die Tabelle einfach mitten drin auf die
+    // naechste Seite weiterlaufen lassen, sobald der Rest der aktuellen Seite nicht mehr reicht,
+    // und ein Team auf zwei Seiten aufteilen. Die Konstanten sind bewusst grosszuegig geschaetzt
+    // (eher ein Umbruch zu viel als eine Tabelle, die doch noch mitten drin umbricht).
+    const TITEL_HOEHE_MM = 4;
+    const KOPF_HOEHE_MM = 8;
+    const ZEILEN_HOEHE_MM = 4.5;
+
     function abschnittZeichnen(titel: string, zeilen: { label: string; zellen: { text: string; farbe?: string }[] }[]) {
-      if (naechsteStartY > seitenHoehe - 30) {
+      const geschaetzteHoehe = TITEL_HOEHE_MM + KOPF_HOEHE_MM + zeilen.length * ZEILEN_HOEHE_MM;
+      const nutzbareHoeheProSeite = seitenHoehe - 12 - 12;
+      const passtNichtMehrAufAktuelleSeite = naechsteStartY + geschaetzteHoehe > seitenHoehe - 12;
+      // Passt der Abschnitt selbst nicht auf eine komplette leere Seite (sehr grosses Team),
+      // bringt ein erzwungener Umbruch nichts -- dann lieber den natuerlichen Tabellenumbruch von
+      // autoTable zulassen, statt eine leere Seite zu verschwenden.
+      if (passtNichtMehrAufAktuelleSeite && geschaetzteHoehe <= nutzbareHoeheProSeite) {
         doc.addPage();
         naechsteStartY = 12;
       }
@@ -297,9 +313,13 @@ export default function TeamUebersichtPage() {
           label: m.name,
           zellen: tage.map((t) => {
             const treffer = pe.zuweisungen.filter((z) => z.benutzerId === m.id && z.datum === t);
-            return treffer.length > 0
-              ? { text: treffer.map((z) => z.kuerzel).join("+"), farbe: treffer[0]?.farbe }
-              : { text: "frei" };
+            // Mehrere Schichten am selben Tag sind ein Datenfehler (siehe Web-Ansicht) -- im PDF
+            // ebenfalls als Konflikt statt als kommentarlos zusammengesetztes "F+N" darstellen.
+            // "!" statt eines Warnsymbols, da jsPDFs Standardschrift (Helvetica/WinAnsi) kein
+            // Unicode-Warnzeichen darstellen kann (wuerde als falsches Glyph gerendert).
+            if (treffer.length > 1) return { text: "!", farbe: "#ec3831" };
+            if (treffer.length === 1) return { text: treffer[0].kuerzel, farbe: treffer[0].farbe };
+            return { text: "frei" };
           }),
         }))
       );
@@ -478,50 +498,60 @@ export default function TeamUebersichtPage() {
                           <td>{m.name}</td>
                           {tage.map((t) => {
                             const treffer = pe.zuweisungen.filter((z) => z.benutzerId === m.id && z.datum === t);
+
+                            // Pro Tag soll ein Mitarbeiter nur eine Schicht haben -- mehrere
+                            // Zuweisungen am selben Tag sind ein Datenfehler (z. B. durch eine
+                            // Schichtbörsen-Vergabe ohne Konfliktprüfung) und werden bewusst NICHT
+                            // wie zwei normale Schichten nebeneinander dargestellt, sondern
+                            // eindeutig als Konflikt markiert.
+                            if (treffer.length > 1) {
+                              const titel =
+                                "Mehrere Schichten am selben Tag:\n" + treffer.map((z) => `${z.kuerzel} – ${z.bezeichnung}`).join("\n");
+                              return (
+                                <td key={t} className={`${tagKlasse(t)} zelle-konflikt`} title={titel}>
+                                  ⚠
+                                </td>
+                              );
+                            }
+
+                            if (treffer.length === 1) {
+                              const z = treffer[0];
+                              const kommentare = z.kommentare ?? [];
+                              const titel =
+                                `${z.bezeichnung} (${z.ganztags ? "ganztägig" : `${z.beginn}–${z.ende}`})` +
+                                (kommentare.length > 0
+                                  ? "\n\n" +
+                                    kommentare
+                                      .map((k) => `${k.sichtbarkeit === "nur_planer" ? "[nur Planer] " : ""}${k.autorName}: ${k.text}`)
+                                      .join("\n")
+                                  : "");
+                              // Die Zelle selbst wird komplett mit der Schichtfarbe gefuellt (wie
+                              // im PDF-Export), statt nur ein kleines Badge darin zu zeigen.
+                              return (
+                                <td key={t} className={tagKlasse(t)} style={{ background: z.farbe, color: kontrastfarbe(z.farbe) }} title={titel}>
+                                  {z.kuerzel}
+                                  {kommentare.length > 0 && <span className="kommentar-marker" />}
+                                </td>
+                              );
+                            }
+
+                            const freiKommentare = (pe.freischichtKommentare ?? []).filter(
+                              (k) => k.benutzerId === m.id && k.datum === t
+                            );
+                            const titel =
+                              "Freischicht" +
+                              (freiKommentare.length > 0
+                                ? "\n\n" +
+                                  freiKommentare
+                                    .map((k) => `${k.sichtbarkeit === "nur_planer" ? "[nur Planer] " : ""}${k.autorName}: ${k.text}`)
+                                    .join("\n")
+                                : "");
                             return (
                               <td key={t} className={tagKlasse(t)}>
-                                {treffer.length > 0 ? (
-                                  treffer.map((z) => {
-                                    const kommentare = z.kommentare ?? [];
-                                    const titel =
-                                      `${z.bezeichnung} (${z.ganztags ? "ganztägig" : `${z.beginn}–${z.ende}`})` +
-                                      (kommentare.length > 0
-                                        ? "\n\n" +
-                                          kommentare
-                                            .map(
-                                              (k) =>
-                                                `${k.sichtbarkeit === "nur_planer" ? "[nur Planer] " : ""}${k.autorName}: ${k.text}`
-                                            )
-                                            .join("\n")
-                                        : "");
-                                    return (
-                                      <span key={z.id} className="badge" style={{ background: z.farbe, color: kontrastfarbe(z.farbe) }} title={titel}>
-                                        {z.kuerzel}
-                                        {kommentare.length > 0 && <span className="kommentar-marker" />}
-                                      </span>
-                                    );
-                                  })
-                                ) : (
-                                  (() => {
-                                    const freiKommentare = (pe.freischichtKommentare ?? []).filter(
-                                      (k) => k.benutzerId === m.id && k.datum === t
-                                    );
-                                    const titel =
-                                      "Freischicht" +
-                                      (freiKommentare.length > 0
-                                        ? "\n\n" +
-                                          freiKommentare
-                                            .map((k) => `${k.sichtbarkeit === "nur_planer" ? "[nur Planer] " : ""}${k.autorName}: ${k.text}`)
-                                            .join("\n")
-                                        : "");
-                                    return (
-                                      <span className="freischicht-hinweis" title={titel}>
-                                        frei
-                                        {freiKommentare.length > 0 && <span className="kommentar-marker" />}
-                                      </span>
-                                    );
-                                  })()
-                                )}
+                                <span className="freischicht-hinweis" title={titel}>
+                                  frei
+                                  {freiKommentare.length > 0 && <span className="kommentar-marker" />}
+                                </span>
                               </td>
                             );
                           })}
