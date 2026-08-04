@@ -2,6 +2,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { api } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 import MitelFarbauswahl from "../components/MitelFarbauswahl";
+import { kontrastfarbe } from "../lib/farbe";
 
 interface Schichtart {
   id: number;
@@ -67,6 +68,26 @@ interface Vorlage {
   id: number;
   bezeichnung: string;
   eintraege: VorlageEintrag[];
+}
+
+interface BesetzungsregelZiele {
+  mo: number;
+  di: number;
+  mi: number;
+  do: number;
+  fr: number;
+  sa: number;
+  so: number;
+}
+interface Besetzungsregel {
+  id: number;
+  schichtartId: number;
+  kuerzel: string;
+  bezeichnung: string;
+  farbe: string;
+  warntBeiUeberbesetzung: boolean;
+  ziele: BesetzungsregelZiele;
+  planungseinheiten: { id: number; name: string }[];
 }
 
 interface PlanungseinheitOption {
@@ -144,6 +165,7 @@ export default function StammdatenPage() {
 
       {einheitenOptionen.length > 0 && <SchichtartenSektion />}
       {einheitenOptionen.length > 0 && <BereitschaftsartenSektion />}
+      {einheitenOptionen.length > 0 && <MindestbesetzungSektion />}
       {peId != null && <SchichtblockVorlagenSektion peId={peId} />}
       {einheitenOptionen.length > 0 && <FeiertageSektion />}
 
@@ -621,6 +643,203 @@ function BereitschaftsartenSektion() {
             <tr>
               <td colSpan={5} className="empty">
                 Noch keine Bereitschaftsart angelegt.
+              </td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </section>
+  );
+}
+
+const WOCHENTAGE_ZIEL: { feld: keyof BesetzungsregelZiele; label: string }[] = [
+  { feld: "mo", label: "Mo" },
+  { feld: "di", label: "Di" },
+  { feld: "mi", label: "Mi" },
+  { feld: "do", label: "Do" },
+  { feld: "fr", label: "Fr" },
+  { feld: "sa", label: "Sa" },
+  { feld: "so", label: "So" },
+];
+
+const LEERE_ZIELE: BesetzungsregelZiele = { mo: 1, di: 1, mi: 1, do: 1, fr: 1, sa: 1, so: 1 };
+
+// Mindestbesetzung: Soll-Anzahl einer Dienst-Schichtart je Wochentag, ausgewertet ueber eine oder
+// mehrere Teams gemeinsam -- global wie Schichtarten/Bereitschaftsarten, daher ohne
+// Planungseinheiten-Auswahl in der URL. Wird in der Plantafel als Ist/Soll je Tag angezeigt.
+function MindestbesetzungSektion() {
+  const [regeln, setRegeln] = useState<Besetzungsregel[]>([]);
+  const [schichtarten, setSchichtarten] = useState<Schichtart[]>([]);
+  const [einheiten, setEinheiten] = useState<PlanungseinheitOption[]>([]);
+  const [editId, setEditId] = useState<number | null>(null);
+  const [schichtartId, setSchichtartId] = useState<number | "">("");
+  const [warntBeiUeberbesetzung, setWarntBeiUeberbesetzung] = useState(false);
+  const [ziele, setZiele] = useState<BesetzungsregelZiele>(LEERE_ZIELE);
+  const [ausgewaehlteTeams, setAusgewaehlteTeams] = useState<number[]>([]);
+  const [error, setError] = useState<string | null>(null);
+
+  function load() {
+    api<Besetzungsregel[]>("/besetzungsregeln").then(setRegeln);
+  }
+
+  useEffect(load, []);
+  useEffect(() => {
+    api<Schichtart[]>("/schichtarten").then((rows) => setSchichtarten(rows.filter((s) => s.kategorie === "dienst" && !s.archiviert)));
+    api<PlanungseinheitOption[]>("/planungseinheiten").then(setEinheiten);
+  }, []);
+
+  function formularZuruecksetzen() {
+    setEditId(null);
+    setSchichtartId("");
+    setWarntBeiUeberbesetzung(false);
+    setZiele(LEERE_ZIELE);
+    setAusgewaehlteTeams([]);
+    setError(null);
+  }
+
+  function bearbeitenStart(r: Besetzungsregel) {
+    setEditId(r.id);
+    setSchichtartId(r.schichtartId);
+    setWarntBeiUeberbesetzung(r.warntBeiUeberbesetzung);
+    setZiele(r.ziele);
+    setAusgewaehlteTeams(r.planungseinheiten.map((p) => p.id));
+    setError(null);
+  }
+
+  async function speichern(e: FormEvent) {
+    e.preventDefault();
+    setError(null);
+    if (!schichtartId || ausgewaehlteTeams.length === 0) {
+      setError("Schichtart und mindestens ein Team sind erforderlich.");
+      return;
+    }
+    const body = { schichtartId, warntBeiUeberbesetzung, ziele, planungseinheitIds: ausgewaehlteTeams };
+    try {
+      if (editId != null) {
+        await api(`/besetzungsregeln/${editId}`, { method: "PUT", body: JSON.stringify(body) });
+      } else {
+        await api("/besetzungsregeln", { method: "POST", body: JSON.stringify(body) });
+      }
+      formularZuruecksetzen();
+      load();
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
+  async function loeschen(id: number) {
+    if (!confirm("Mindestbesetzungs-Regel löschen?")) return;
+    await api(`/besetzungsregeln/${id}`, { method: "DELETE" });
+    if (editId === id) formularZuruecksetzen();
+    load();
+  }
+
+  return (
+    <section>
+      <h2>Mindestbesetzung</h2>
+      <p className="hint">
+        Legt je Wochentag fest, wie viele Zuweisungen einer Dienst-Schichtart mindestens vorhanden sein sollen -- ausgewertet über eine oder
+        mehrere Teams hinweg gemeinsam (nicht je Team getrennt). Wird in der Plantafel als Ist/Soll je Tag angezeigt und fällt farblich auf,
+        wenn das Ziel nicht erreicht wird; optional zusätzlich auch bei Überbesetzung.
+      </p>
+
+      <form className="card" onSubmit={speichern}>
+        <div className="form-inline">
+          <label>
+            Schichtart
+            <select value={schichtartId} onChange={(e) => setSchichtartId(e.target.value ? Number(e.target.value) : "")}>
+              <option value="">Bitte wählen…</option>
+              {schichtarten.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.kuerzel} – {s.bezeichnung}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="wochentag-checkbox">
+            <input type="checkbox" checked={warntBeiUeberbesetzung} onChange={(e) => setWarntBeiUeberbesetzung(e.target.checked)} />
+            Auch bei Überbesetzung warnen
+          </label>
+        </div>
+
+        <div className="wochentage-auswahl">
+          {WOCHENTAGE_ZIEL.map(({ feld, label }) => (
+            <label key={feld} className="wochentag-checkbox">
+              {label}
+              <input
+                type="number"
+                min={0}
+                value={ziele[feld]}
+                onChange={(e) => setZiele({ ...ziele, [feld]: Math.max(0, Number(e.target.value)) })}
+                style={{ width: "3.5rem" }}
+              />
+            </label>
+          ))}
+        </div>
+
+        <div className="wochentage-auswahl">
+          {einheiten.map((pe) => (
+            <label key={pe.id} className="wochentag-checkbox">
+              <input
+                type="checkbox"
+                checked={ausgewaehlteTeams.includes(pe.id)}
+                onChange={(e) =>
+                  setAusgewaehlteTeams(e.target.checked ? [...ausgewaehlteTeams, pe.id] : ausgewaehlteTeams.filter((x) => x !== pe.id))
+                }
+              />
+              {pe.name}
+            </label>
+          ))}
+          {einheiten.length === 0 && <span className="empty">Keine Teams verfügbar.</span>}
+        </div>
+
+        <button type="submit">{editId != null ? "Speichern" : "Anlegen"}</button>
+        {editId != null && (
+          <button type="button" onClick={formularZuruecksetzen}>
+            Abbrechen
+          </button>
+        )}
+      </form>
+      {error && <div className="error">{error}</div>}
+
+      <table className="table">
+        <thead>
+          <tr>
+            <th>Schichtart</th>
+            {WOCHENTAGE_ZIEL.map(({ label }) => (
+              <th key={label}>{label}</th>
+            ))}
+            <th>Teams</th>
+            <th>Überbesetzung</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {regeln.map((r) => (
+            <tr key={r.id}>
+              <td>
+                <span className="badge" style={{ background: r.farbe, color: kontrastfarbe(r.farbe) }}>
+                  {r.kuerzel}
+                </span>{" "}
+                {r.bezeichnung}
+              </td>
+              {WOCHENTAGE_ZIEL.map(({ feld }) => (
+                <td key={feld}>{r.ziele[feld]}</td>
+              ))}
+              <td>{r.planungseinheiten.map((p) => p.name).join(", ")}</td>
+              <td>{r.warntBeiUeberbesetzung ? "Ja" : "Nein"}</td>
+              <td>
+                <button onClick={() => bearbeitenStart(r)}>Bearbeiten</button>
+                <button type="button" onClick={() => loeschen(r.id)}>
+                  Löschen
+                </button>
+              </td>
+            </tr>
+          ))}
+          {regeln.length === 0 && (
+            <tr>
+              <td colSpan={11} className="empty">
+                Noch keine Mindestbesetzung angelegt.
               </td>
             </tr>
           )}

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { db } from "../lib/db";
 import { requireAuth, requirePlaner, AuthedRequest } from "../middleware/auth";
-import { istPlanerFuerPlanungseinheit, istIrgendeinPlaner } from "../lib/berechtigung";
+import { istPlanerFuerPlanungseinheit, istIrgendeinPlaner, istPlanerFuerTeams, istPlanerFuerBesetzungsregel } from "../lib/berechtigung";
 import { berechneArbeitstage, ladeFeiertage } from "../lib/feiertage";
 
 export const stammdatenRouter = Router();
@@ -330,20 +330,125 @@ stammdatenRouter.delete("/schichtblock-vorlagen/:id", (req: AuthedRequest, res) 
   res.json({ ok: true });
 });
 
-// Besetzungsbedarf
-stammdatenRouter.get("/schichtarten/:id/bedarf", (req, res) => {
-  res.json(db.prepare("SELECT * FROM besetzungsbedarf WHERE schichtart_id = ?").all(req.params.id));
+// Mindestbesetzung: Soll-Anzahl einer Schichtart je Wochentag, ausgewertet ueber eine oder mehrere
+// Planungseinheiten hinweg (siehe besetzungsregel_planungseinheit) -- ein Team kann sich so mit
+// einem anderen die Mindestbesetzung teilen. Verwaltung erfordert Planer-Berechtigung in
+// mindestens einer der betroffenen Einheiten (gleiches Prinzip wie bei Ausschreibungen).
+const WOCHENTAG_FELDER = ["mo", "di", "mi", "do", "fr", "sa", "so"] as const;
+const WOCHENTAG_SPALTEN = WOCHENTAG_FELDER.map((f) => `ziel_${f}`);
+
+function ladeBesetzungsregel(row: any) {
+  const planungseinheiten = db
+    .prepare(
+      `SELECT p.id, p.name FROM besetzungsregel_planungseinheit rp JOIN planungseinheit p ON p.id = rp.planungseinheit_id
+       WHERE rp.besetzungsregel_id = ? ORDER BY p.name`
+    )
+    .all(row.id);
+  const ziele: Record<string, number> = {};
+  WOCHENTAG_FELDER.forEach((f) => (ziele[f] = row[`ziel_${f}`]));
+  return {
+    id: row.id,
+    schichtartId: row.schichtart_id,
+    kuerzel: row.kuerzel,
+    bezeichnung: row.schichtart_bezeichnung,
+    farbe: row.farbe,
+    warntBeiUeberbesetzung: !!row.warnt_bei_ueberbesetzung,
+    ziele,
+    planungseinheiten,
+  };
+}
+
+// Liest und validiert die 7 Wochentag-Zielwerte aus dem Request-Body; gibt bei Fehlern null
+// zurueck und beantwortet die Antwort bereits selbst (spart eine Fehlerbehandlung je Aufrufer).
+function pruefeZiele(req: AuthedRequest, res: import("express").Response): number[] | null {
+  const ziele = WOCHENTAG_FELDER.map((f) => Number(req.body?.ziele?.[f]));
+  if (ziele.some((z) => !Number.isInteger(z) || z < 0)) {
+    res.status(400).json({ error: "ziele.mo..so muessen nicht-negative ganze Zahlen sein" });
+    return null;
+  }
+  return ziele;
+}
+
+stammdatenRouter.get("/besetzungsregeln", (_req, res) => {
+  const rows = db
+    .prepare(
+      `SELECT r.*, sa.kuerzel, sa.bezeichnung AS schichtart_bezeichnung, sa.farbe
+       FROM besetzungsregel r JOIN schichtart sa ON sa.id = r.schichtart_id
+       ORDER BY sa.bezeichnung`
+    )
+    .all() as any[];
+  res.json(rows.map(ladeBesetzungsregel));
 });
 
-stammdatenRouter.post("/schichtarten/:id/bedarf", (req, res) => {
-  const { wochentag, sollAnzahl, qualifikationId } = req.body ?? {};
-  if (wochentag === undefined || sollAnzahl === undefined) {
-    return res.status(400).json({ error: "wochentag und sollAnzahl erforderlich" });
+stammdatenRouter.post("/besetzungsregeln", (req: AuthedRequest, res) => {
+  const { schichtartId, warntBeiUeberbesetzung, planungseinheitIds } = req.body ?? {};
+  const teamIds: number[] = Array.isArray(planungseinheitIds) ? planungseinheitIds.map(Number) : [];
+  if (!schichtartId || teamIds.length === 0) {
+    return res.status(400).json({ error: "schichtartId und mindestens eine planungseinheitId erforderlich" });
   }
+  if (!istPlanerFuerTeams(req, teamIds)) {
+    return res.status(403).json({ error: "Keine Planer-Berechtigung fuer eines der gewaehlten Teams" });
+  }
+  const schichtart = db.prepare("SELECT kategorie FROM schichtart WHERE id = ?").get(schichtartId) as { kategorie: string } | undefined;
+  if (!schichtart) return res.status(404).json({ error: "Schichtart nicht gefunden" });
+  if (schichtart.kategorie !== "dienst") {
+    return res.status(400).json({ error: "Mindestbesetzung ist nur fuer Dienste moeglich, nicht fuer Abwesenheiten" });
+  }
+  const ziele = pruefeZiele(req, res);
+  if (!ziele) return;
+
   const info = db
-    .prepare("INSERT INTO besetzungsbedarf (schichtart_id, wochentag, soll_anzahl, qualifikation_id) VALUES (?,?,?,?)")
-    .run(req.params.id, wochentag, sollAnzahl, qualifikationId ?? null);
+    .prepare(
+      `INSERT INTO besetzungsregel (schichtart_id, warnt_bei_ueberbesetzung, ${WOCHENTAG_SPALTEN.join(",")})
+       VALUES (?,?,${WOCHENTAG_SPALTEN.map(() => "?").join(",")})`
+    )
+    .run(schichtartId, warntBeiUeberbesetzung ? 1 : 0, ...ziele);
+  const insertPe = db.prepare("INSERT INTO besetzungsregel_planungseinheit (besetzungsregel_id, planungseinheit_id) VALUES (?,?)");
+  for (const peId of teamIds) insertPe.run(info.lastInsertRowid, peId);
   res.status(201).json({ id: info.lastInsertRowid });
+});
+
+stammdatenRouter.put("/besetzungsregeln/:id", (req: AuthedRequest, res) => {
+  if (!db.prepare("SELECT id FROM besetzungsregel WHERE id = ?").get(req.params.id)) {
+    return res.status(404).json({ error: "Regel nicht gefunden" });
+  }
+  if (!istPlanerFuerBesetzungsregel(req, req.params.id)) {
+    return res.status(403).json({ error: "Keine Planer-Berechtigung fuer diese Regel" });
+  }
+  const { schichtartId, warntBeiUeberbesetzung, planungseinheitIds } = req.body ?? {};
+  const teamIds: number[] = Array.isArray(planungseinheitIds) ? planungseinheitIds.map(Number) : [];
+  if (!schichtartId || teamIds.length === 0) {
+    return res.status(400).json({ error: "schichtartId und mindestens eine planungseinheitId erforderlich" });
+  }
+  if (!istPlanerFuerTeams(req, teamIds)) {
+    return res.status(403).json({ error: "Keine Planer-Berechtigung fuer eines der gewaehlten Teams" });
+  }
+  const schichtart = db.prepare("SELECT kategorie FROM schichtart WHERE id = ?").get(schichtartId) as { kategorie: string } | undefined;
+  if (!schichtart) return res.status(404).json({ error: "Schichtart nicht gefunden" });
+  if (schichtart.kategorie !== "dienst") {
+    return res.status(400).json({ error: "Mindestbesetzung ist nur fuer Dienste moeglich, nicht fuer Abwesenheiten" });
+  }
+  const ziele = pruefeZiele(req, res);
+  if (!ziele) return;
+
+  db.prepare(
+    `UPDATE besetzungsregel SET schichtart_id=?, warnt_bei_ueberbesetzung=?, ${WOCHENTAG_SPALTEN.map((s) => `${s}=?`).join(",")} WHERE id=?`
+  ).run(schichtartId, warntBeiUeberbesetzung ? 1 : 0, ...ziele, req.params.id);
+  db.prepare("DELETE FROM besetzungsregel_planungseinheit WHERE besetzungsregel_id = ?").run(req.params.id);
+  const insertPe = db.prepare("INSERT INTO besetzungsregel_planungseinheit (besetzungsregel_id, planungseinheit_id) VALUES (?,?)");
+  for (const peId of teamIds) insertPe.run(req.params.id, peId);
+  res.json({ ok: true });
+});
+
+stammdatenRouter.delete("/besetzungsregeln/:id", (req: AuthedRequest, res) => {
+  if (!db.prepare("SELECT id FROM besetzungsregel WHERE id = ?").get(req.params.id)) {
+    return res.status(404).json({ error: "Regel nicht gefunden" });
+  }
+  if (!istPlanerFuerBesetzungsregel(req, req.params.id)) {
+    return res.status(403).json({ error: "Keine Planer-Berechtigung fuer diese Regel" });
+  }
+  db.prepare("DELETE FROM besetzungsregel WHERE id = ?").run(req.params.id);
+  res.json({ ok: true });
 });
 
 // Abwesenheiten

@@ -34,6 +34,26 @@ interface Vorlage {
   eintraege: VorlageEintrag[];
   enthaeltArchivierte: boolean | number;
 }
+interface BesetzungsregelZiele {
+  mo: number;
+  di: number;
+  mi: number;
+  do: number;
+  fr: number;
+  sa: number;
+  so: number;
+}
+interface BesetzungsregelStatus {
+  id: number;
+  schichtartId: number;
+  kuerzel: string;
+  bezeichnung: string;
+  farbe: string;
+  warntBeiUeberbesetzung: boolean;
+  ziele: BesetzungsregelZiele;
+  planungseinheiten: { id: number; name: string }[];
+  istProTag: Record<string, number>;
+}
 interface Kommentar {
   id: number;
   zuweisung_id: number;
@@ -157,6 +177,15 @@ function wochenBloecke(tage: string[]): { kw: number; anzahl: number }[] {
   return bloecke;
 }
 
+const WOCHENTAG_ZIEL_SCHLUESSEL = ["mo", "di", "mi", "do", "fr", "sa", "so"] as const;
+
+// Liefert den zum Datum passenden Schluessel in BesetzungsregelZiele (mo..so) -- getDay() liefert
+// 0=So..6=Sa, die Ziele-Reihenfolge beginnt aber montags.
+function wochentagZielSchluessel(datumIso: string): (typeof WOCHENTAG_ZIEL_SCHLUESSEL)[number] {
+  const tag = new Date(`${datumIso}T00:00:00`).getDay();
+  return WOCHENTAG_ZIEL_SCHLUESSEL[(tag + 6) % 7];
+}
+
 // Konfliktliste einer 409-Antwort lesbar aufbereiten; bei Schichtbloecken ist je Konflikt ein
 // Datum dabei, bei Einzelzuweisungen nicht.
 function konfliktText(err: unknown): string | null {
@@ -202,6 +231,7 @@ export default function PlantafelPage() {
 
   const [datenNachPe, setDatenNachPe] = useState<Map<number, PlantafelDaten>>(new Map());
   const [vorlagenNachPe, setVorlagenNachPe] = useState<Map<number, Vorlage[]>>(new Map());
+  const [besetzungsregeln, setBesetzungsregeln] = useState<BesetzungsregelStatus[]>([]);
   const [schichtarten, setSchichtarten] = useState<Schichtart[]>([]);
   const [bereitschaftsarten, setBereitschaftsarten] = useState<Bereitschaftsart[]>([]);
   const [feiertage, setFeiertage] = useState<Set<string>>(new Set());
@@ -265,6 +295,8 @@ export default function PlantafelPage() {
     const neueVorlagen = new Map<number, Vorlage[]>();
     einheiten.forEach((pe, i) => neueVorlagen.set(pe.id, vorlagenErgebnisse[i]));
     setVorlagenNachPe(neueVorlagen);
+
+    setBesetzungsregeln(await api<BesetzungsregelStatus[]>(`/besetzungsregeln/status?von=${von}&bis=${bis}`));
   }
 
   useEffect(() => {
@@ -704,6 +736,11 @@ export default function PlantafelPage() {
   // angezeigte Team-Sektion) -- sie stehen daher wie Einzelschichten/Bereitschaften global in der
   // Palette statt dupliziert je Team-Sektion.
   const alleVorlagen = einheiten.flatMap((pe) => vorlagenNachPe.get(pe.id) ?? []);
+  // Nur Regeln zeigen, die mindestens eines der eigenen (sichtbaren) Teams betreffen -- eine Regel
+  // kann durchaus ein Team einschliessen, das dieser Planer gar nicht verwaltet.
+  const sichtbareBesetzungsregeln = besetzungsregeln.filter((r) =>
+    r.planungseinheiten.some((rp) => einheiten.some((e) => e.id === rp.id))
+  );
 
   return (
     <div className="page">
@@ -839,6 +876,62 @@ export default function PlantafelPage() {
             "Werkzeug wählen, um Schichten zuzuweisen. Ohne Werkzeug öffnet ein Klick auf ein Kürzel oder eine Freischicht die Details."}
         </span>
       </div>
+
+      {sichtbareBesetzungsregeln.length > 0 && (
+        <section className="plantafel-team-sektion">
+          <h2>Mindestbesetzung</h2>
+          <div className="plantafel-scroll">
+            <table className="table plantafel">
+              <thead>
+                <tr className="kw-zeile">
+                  <th></th>
+                  {wochenBloecke(tage).map((block, i) => (
+                    <th key={i} colSpan={block.anzahl} className="kw-spalte">
+                      KW {block.kw}
+                    </th>
+                  ))}
+                </tr>
+                <tr>
+                  <th>Schichtart</th>
+                  {tage.map((t) => {
+                    const klassen = [istWochenende(t) ? "wochenende" : "", feiertage.has(t) ? "feiertag" : ""].filter(Boolean).join(" ");
+                    return (
+                      <th key={t} className={klassen}>
+                        <div className="tag-nr">{Number(t.slice(8, 10))}</div>
+                        <div className="tag-wt">{wochentagKurz(t)}</div>
+                      </th>
+                    );
+                  })}
+                </tr>
+              </thead>
+              <tbody>
+                {sichtbareBesetzungsregeln.map((r) => (
+                  <tr key={r.id}>
+                    <td title={r.planungseinheiten.map((p) => p.name).join(", ")}>
+                      <span className="badge" style={{ background: r.farbe, color: kontrastfarbe(r.farbe) }}>
+                        {r.kuerzel}
+                      </span>{" "}
+                      {r.bezeichnung}
+                    </td>
+                    {tage.map((t) => {
+                      const soll = r.ziele[wochentagZielSchluessel(t)];
+                      const ist = r.istProTag[t] ?? 0;
+                      const klassen = ["plan-zelle"];
+                      if (ist < soll) klassen.push("besetzung-unter");
+                      else if (ist > soll && r.warntBeiUeberbesetzung) klassen.push("besetzung-ueber");
+                      return (
+                        <td key={t} className={klassen.join(" ")} title={`${r.bezeichnung}: ${ist} von ${soll} geplant`}>
+                          {ist}/{soll}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
       {sichtbareEinheiten.map((pe) => {
         const daten = datenNachPe.get(pe.id);

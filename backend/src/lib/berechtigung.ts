@@ -43,6 +43,26 @@ export function istIrgendeinPlaner(req: AuthedRequest): boolean {
   return !!db.prepare("SELECT 1 FROM mitgliedschaft WHERE benutzer_id = ? AND rolle = 'planer'").get(req.user!.sub);
 }
 
+// Eine Mindestbesetzungs-Regel bezieht sich auf eine oder mehrere Planungseinheiten (siehe
+// besetzungsregel_planungseinheit) -- Planer einer der betroffenen Teams genuegt, gleiches Prinzip
+// wie bei Ausschreibungen (istPlanerFuerAusschreibung).
+export function istPlanerFuerTeams(req: AuthedRequest, planungseinheitIds: number[]): boolean {
+  if (req.user!.istAdmin) return true;
+  if (planungseinheitIds.length === 0) return istIrgendeinPlaner(req);
+  return planungseinheitIds.some((id) => istPlanerFuerPlanungseinheit(req, id));
+}
+
+export function istPlanerFuerBesetzungsregel(req: AuthedRequest, besetzungsregelId: string | number): boolean {
+  if (req.user!.istAdmin) return true;
+  const teams = db
+    .prepare("SELECT planungseinheit_id FROM besetzungsregel_planungseinheit WHERE besetzungsregel_id = ?")
+    .all(besetzungsregelId) as { planungseinheit_id: number }[];
+  return istPlanerFuerTeams(
+    req,
+    teams.map((t) => t.planungseinheit_id)
+  );
+}
+
 // Da Schichtarten global sind, "gehoert" eine Zuweisung keiner bestimmten Planungseinheit mehr.
 // Verwalten darf sie, wer Planer einer Einheit ist, in der auch der betroffene Mitarbeiter Mitglied
 // ist -- ein geteiltes Team genuegt, auch wenn die Schicht urspruenglich ueber ein anderes Team des
