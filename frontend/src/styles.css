@@ -202,6 +202,64 @@ body {
 }
 .popover-kopf { display: flex; justify-content: space-between; align-items: start; gap: 0.5rem; }
 .popover-schliessen { border: none; background: transparent; font-size: 1.3rem; cursor: pointer; color: var(--mitel-grau); }
+
+/* Rechtsklick-Kontextmenue der Plantafel: positioniert am Mauszeiger statt zentriert, damit es
+   sich wie ein natives Kontextmenue anfuehlt. */
+.kontextmenue {
+  position: fixed;
+  z-index: 12;
+  min-width: 14rem;
+  background: white;
+  border: 1px solid var(--mitel-grau-20);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2);
+  padding: 0.25rem 0;
+  font-size: 0.9rem;
+}
+.kontextmenue-eintrag {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 0.4rem 0.9rem;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  position: relative;
+}
+.kontextmenue-eintrag:hover, .kontextmenue-eintrag.kontextmenue-untermenue:hover {
+  background: var(--mitel-grau-10);
+}
+.kontextmenue-trenner { border-top: 1px solid var(--mitel-grau-20); margin: 0.25rem 0; }
+.kontextmenue-pfeil { float: right; color: var(--mitel-grau); }
+.kontextmenue-unterliste {
+  position: absolute;
+  left: 100%;
+  top: -0.25rem;
+  min-width: 14rem;
+  max-height: 60vh;
+  overflow-y: auto;
+  background: white;
+  border: 1px solid var(--mitel-grau-20);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2);
+  padding: 0.25rem 0;
+}
+.kontextmenue-untereintrag {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  text-align: left;
+  padding: 0.35rem 0.9rem;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.9rem;
+  white-space: nowrap;
+}
+.kontextmenue-untereintrag:hover { background: var(--mitel-grau-10); }
+.kontextmenue-farbpunkt { display: inline-block; width: 0.7rem; height: 0.7rem; border-radius: 50%; flex-shrink: 0; }
+.kontextmenue-leer { display: block; padding: 0.4rem 0.9rem; }
 .kommentar-liste { margin: 0.75rem 0; }
 .kommentar-eintrag { border-top: 1px solid var(--mitel-grau-10); padding: 0.4rem 0; font-size: 0.9rem; }
 .kommentar-meta { display: flex; align-items: center; gap: 0.4rem; color: var(--mitel-grau); font-size: 0.78rem; }
