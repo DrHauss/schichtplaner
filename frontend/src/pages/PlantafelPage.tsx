@@ -168,10 +168,11 @@ export default function PlantafelPage() {
 
   // Team-Auswahl: "alle" zeigt weiterhin alle Teams als eigene Sektionen untereinander (bisheriges
   // Verhalten), eine konkrete Planungseinheit blendet alle anderen Sektionen aus. Anzeige-Filter
-  // blendet zusaetzlich innerhalb jeder Zelle Dienste/Abwesenheiten/Bereitschaften aus -- rein
-  // visuell, die zugrundeliegenden Daten und alle Aktionen (Ziehen, Kontextmenue) bleiben unveraendert.
+  // blendet zusaetzlich innerhalb jeder Zelle Schichten (Dienste+Abwesenheiten zusammen) oder
+  // Bereitschaften aus -- rein visuell, die zugrundeliegenden Daten und alle Aktionen (Ziehen,
+  // Kontextmenue) bleiben unveraendert.
   const [teamFilter, setTeamFilter] = useState<number | "alle">("alle");
-  const [anzeigeFilter, setAnzeigeFilter] = useState<"alle" | "dienst" | "abwesenheit" | "bereitschaft">("alle");
+  const [anzeigeFilter, setAnzeigeFilter] = useState<"alle" | "schichten" | "bereitschaft">("alle");
 
   const [datenNachPe, setDatenNachPe] = useState<Map<number, PlantafelDaten>>(new Map());
   const [vorlagenNachPe, setVorlagenNachPe] = useState<Map<number, Vorlage[]>>(new Map());
@@ -698,8 +699,7 @@ export default function PlantafelPage() {
           Anzeige
           <select value={anzeigeFilter} onChange={(e) => setAnzeigeFilter(e.target.value as typeof anzeigeFilter)}>
             <option value="alle">Alles</option>
-            <option value="dienst">Nur Dienste</option>
-            <option value="abwesenheit">Nur Abwesenheiten</option>
+            <option value="schichten">Nur Schichten</option>
             <option value="bereitschaft">Nur Bereitschaften</option>
           </select>
         </label>
@@ -857,12 +857,7 @@ export default function PlantafelPage() {
                           // angezeigt wird, aendert aber nichts an Konfliktpruefung, "frei"-Erkennung
                           // oder den ueber Ziehen/Kontextmenue verfuegbaren Aktionen.
                           const alleTreffer = zellenZuweisungen(pe.id, m.id, t);
-                          const treffer =
-                            anzeigeFilter === "bereitschaft"
-                              ? []
-                              : anzeigeFilter === "alle"
-                              ? alleTreffer
-                              : alleTreffer.filter((z) => schichtarten.find((sa) => sa.id === z.schichtart_id)?.kategorie === anzeigeFilter);
+                          const treffer = anzeigeFilter === "bereitschaft" ? [] : alleTreffer;
                           const klassen = ["plan-zelle", istWochenende(t) ? "wochenende" : "", feiertage.has(t) ? "feiertag" : ""]
                             .filter(Boolean)
                             .join(" ");
@@ -874,8 +869,7 @@ export default function PlantafelPage() {
                           // bleiben dabei klickbar, damit der Planer den Konflikt direkt hier
                           // aufloesen kann (z. B. eine der beiden Zuweisungen loeschen).
                           const konflikt = alleTreffer.length > 1;
-                          const bereitschaften =
-                            anzeigeFilter === "dienst" || anzeigeFilter === "abwesenheit" ? [] : zellenBereitschaften(pe.id, m.id, t);
+                          const bereitschaften = anzeigeFilter === "schichten" ? [] : zellenBereitschaften(pe.id, m.id, t);
                           return (
                             <td
                               key={t}
@@ -891,7 +885,42 @@ export default function PlantafelPage() {
                               onContextMenu={(e) => zelleKontextMenu(e, pe.id, m.id, t)}
                             >
                               <div className={`zelle-schicht-zeile${konflikt ? " zelle-konflikt" : ""}`} title={konflikt ? "Mehrere Schichten am selben Tag!" : undefined}>
-                                {treffer.length > 0 ? (
+                                {treffer.length === 1 ? (
+                                  (() => {
+                                    // Genau eine Schicht ist der Normalfall -- die Zeile wird dann
+                                    // wie in der Team-Uebersicht komplett mit der Schichtfarbe
+                                    // gefuellt statt nur ein kleines Badge zu zeigen. Bei mehreren
+                                    // (Konflikt, siehe unten) waere eine einzige Fuellfarbe irrefuehrend,
+                                    // daher bleiben es dort einzelne kleine Badges.
+                                    const z = treffer[0];
+                                    const sa = schichtarten.find((s) => s.id === z.schichtart_id);
+                                    if (!sa) return null;
+                                    const anzahlKommentare = kommentareFuer(pe.id, z.id).length;
+                                    return (
+                                      <div
+                                        className={`zelle-schicht-gefuellt${z.status === "entwurf" ? " badge-entwurf" : ""}`}
+                                        style={{ background: sa.farbe, color: kontrastfarbe(sa.farbe) }}
+                                        title={`${sa.bezeichnung} (${z.status})${anzahlKommentare > 0 ? ` · ${anzahlKommentare} Kommentar(e)` : ""}`}
+                                        onMouseDown={(e) => {
+                                          if (e.button !== 0) return;
+                                          e.stopPropagation();
+                                          zelleMouseDown(pe.id, z.benutzer_id, z.datum);
+                                        }}
+                                        onMouseEnter={(e) => {
+                                          e.stopPropagation();
+                                          zelleMouseEnter(pe.id, z.benutzer_id, z.datum);
+                                        }}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          badgeKlick(z);
+                                        }}
+                                      >
+                                        {sa.kuerzel}
+                                        {anzahlKommentare > 0 && <span className="kommentar-marker" />}
+                                      </div>
+                                    );
+                                  })()
+                                ) : treffer.length > 1 ? (
                                   treffer.map((z) => {
                                     const sa = schichtarten.find((s) => s.id === z.schichtart_id);
                                     if (!sa) return null;

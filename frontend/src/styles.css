@@ -156,6 +156,21 @@ body {
    das soll auch optisch als eigene Zeile erkennbar sein. */
 .zelle-schicht-zeile { display: block; min-height: 1.3rem; }
 .zelle-bereitschaft-zeile { display: block; margin-top: 0.1rem; }
+/* Genau eine Schicht am Tag ist der Normalfall -- die Zeile wird dann (wie in der Team-Uebersicht
+   und im PDF-Export) komplett mit der Schichtfarbe gefuellt statt nur ein kleines Badge zu zeigen.
+   Bei mehreren Schichten am selben Tag (Konflikt) bleiben es bewusst einzelne kleine Badges, siehe
+   .zelle-konflikt weiter unten -- eine Fuellfarbe waere dort irrefuehrend. */
+.zelle-schicht-gefuellt {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 1.3rem;
+  border-radius: 4px;
+  font-weight: 600;
+  font-size: 0.85rem;
+  cursor: pointer;
+  position: relative;
+}
 /* Pro Tag genau eine Schicht ist die Regel -- kommt es dennoch zu mehreren (Datenfehler, z. B.
    durch eine Schichtboersen-Vergabe ohne Konfliktpruefung), markiert eine rote Warntafel-Musterung
    die Zelle deutlich als Konflikt. Die einzelnen Schicht-Badges bleiben darin klickbar, damit der
