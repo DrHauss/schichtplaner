@@ -9,7 +9,12 @@ export const abfrageRouter = Router();
 
 const anfragenJeToken = new Map<string, number[]>();
 const FENSTER_MS = 60_000;
-const MAX_ANFRAGEN = 30;
+// Jede Rueckmeldung verbraucht zwei Anfragen (PUT Antwort + GET Neuladen der Zeile), und eine
+// Jahresabfrage kann leicht ueber 100 Termine/Bloecke umfassen -- 30 war fuer zuegiges
+// Durchklicken deutlich zu knapp bemessen. Der Token selbst ist bereits ein 128-Bit-Zufallswert
+// (siehe legeTeilnehmerAn), Brute-Force ueber diese Rate hinaus ist ohnehin nicht der relevante
+// Schutzmechanismus -- das Limit dient nur gegen grobe Anfragefluten.
+const MAX_ANFRAGEN = 300;
 
 function rateLimit(req: Request, res: Response, next: NextFunction) {
   const schluessel = req.params.token;
