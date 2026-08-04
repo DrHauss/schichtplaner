@@ -85,7 +85,7 @@ interface PlantafelDaten {
 type Werkzeug =
   | { art: "schichtart"; schichtart: Schichtart }
   | { art: "bereitschaft"; bereitschaftsart: Bereitschaftsart }
-  | { art: "vorlage"; peId: number; vorlage: Vorlage }
+  | { art: "vorlage"; vorlage: Vorlage }
   | { art: "radierer" };
 
 const WOCHENTAGE_KURZ = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"];
@@ -129,6 +129,32 @@ function wochentagKurz(datumIso: string): string {
 function istWochenende(datumIso: string): boolean {
   const tag = new Date(`${datumIso}T00:00:00`).getDay();
   return tag === 0 || tag === 6;
+}
+
+// ISO-8601-Kalenderwoche (Woche mit dem ersten Donnerstag des Jahres ist KW 1, Woche beginnt
+// montags) -- Standardalgorithmus ueber den naechstgelegenen Donnerstag der Woche.
+function kalenderwoche(datumIso: string): number {
+  const datum = new Date(`${datumIso}T00:00:00`);
+  const montagBasiert = (datum.getDay() + 6) % 7;
+  datum.setDate(datum.getDate() - montagBasiert + 3);
+  const ersterDonnerstag = new Date(datum.getFullYear(), 0, 4);
+  const ersterMontagBasiert = (ersterDonnerstag.getDay() + 6) % 7;
+  ersterDonnerstag.setDate(ersterDonnerstag.getDate() - ersterMontagBasiert + 3);
+  return 1 + Math.round((datum.getTime() - ersterDonnerstag.getTime()) / (7 * 24 * 60 * 60 * 1000));
+}
+
+// Fasst aufeinanderfolgende Tage derselben Kalenderwoche zu einem Block zusammen, damit die
+// Kopfzeile die KW-Nummer ueber die gesamte Woche gespannt (colSpan) anzeigen kann -- am Monatsrand
+// ist ein Block oft kuerzer als 7 Tage, da nur die tatsaechlich angezeigten Tage gezaehlt werden.
+function wochenBloecke(tage: string[]): { kw: number; anzahl: number }[] {
+  const bloecke: { kw: number; anzahl: number }[] = [];
+  for (const t of tage) {
+    const kw = kalenderwoche(t);
+    const letzter = bloecke[bloecke.length - 1];
+    if (letzter && letzter.kw === kw) letzter.anzahl++;
+    else bloecke.push({ kw, anzahl: 1 });
+  }
+  return bloecke;
 }
 
 // Konfliktliste einer 409-Antwort lesbar aufbereiten; bei Schichtbloecken ist je Konflikt ein
@@ -673,6 +699,11 @@ export default function PlantafelPage() {
 
   const monatLabel = new Date(jahr, monat - 1, 1).toLocaleDateString("de-DE", { month: "long", year: "numeric" });
   const sichtbareEinheiten = teamFilter === "alle" ? einheiten : einheiten.filter((pe) => pe.id === teamFilter);
+  // Schichtblock-Vorlagen lassen sich nirgends team-spezifisch einrichten (die Zuweisung prueft
+  // serverseitig ohnehin nur die Planer-Berechtigung der Vorlage selbst, nicht die aktuell
+  // angezeigte Team-Sektion) -- sie stehen daher wie Einzelschichten/Bereitschaften global in der
+  // Palette statt dupliziert je Team-Sektion.
+  const alleVorlagen = einheiten.flatMap((pe) => vorlagenNachPe.get(pe.id) ?? []);
 
   return (
     <div className="page">
@@ -763,6 +794,24 @@ export default function PlantafelPage() {
           {bereitschaftsarten.length === 0 && <span className="empty">Keine Bereitschaftsarten angelegt.</span>}
         </div>
 
+        <div className="palette-gruppe">
+          <span className="palette-label">Schichtblöcke</span>
+          {alleVorlagen
+            .filter((v) => !v.enthaeltArchivierte)
+            .map((v) => (
+              <button
+                key={v.id}
+                type="button"
+                className={`palette-item palette-vorlage${werkzeug?.art === "vorlage" && werkzeug.vorlage.id === v.id ? " aktiv" : ""}`}
+                title={v.eintraege.map((e) => `Tag ${e.tag_offset + 1}: ${e.kuerzel}`).join(", ")}
+                onClick={() => setWerkzeug({ art: "vorlage", vorlage: v })}
+              >
+                {v.bezeichnung}
+              </button>
+            ))}
+          {alleVorlagen.length === 0 && <span className="empty">Keine Schichtblock-Vorlagen angelegt.</span>}
+        </div>
+
         <div className="palette-gruppe palette-werkzeuge">
           <button
             type="button"
@@ -793,34 +842,11 @@ export default function PlantafelPage() {
 
       {sichtbareEinheiten.map((pe) => {
         const daten = datenNachPe.get(pe.id);
-        const vorlagen = vorlagenNachPe.get(pe.id) ?? [];
         return (
           <section key={pe.id} className="plantafel-team-sektion">
             <div className="toolbar">
               <h2>{pe.name}</h2>
               <button onClick={() => veroeffentlichen(pe.id)}>Plan veröffentlichen</button>
-            </div>
-
-            <div className="card palette">
-              <div className="palette-gruppe">
-                <span className="palette-label">Schichtblöcke</span>
-                {vorlagen
-                  .filter((v) => !v.enthaeltArchivierte)
-                  .map((v) => (
-                    <button
-                      key={v.id}
-                      type="button"
-                      className={`palette-item palette-vorlage${
-                        werkzeug?.art === "vorlage" && werkzeug.peId === pe.id && werkzeug.vorlage.id === v.id ? " aktiv" : ""
-                      }`}
-                      title={v.eintraege.map((e) => `Tag ${e.tag_offset + 1}: ${e.kuerzel}`).join(", ")}
-                      onClick={() => setWerkzeug({ art: "vorlage", peId: pe.id, vorlage: v })}
-                    >
-                      {v.bezeichnung}
-                    </button>
-                  ))}
-                {vorlagen.length === 0 && <span className="empty">Keine Schichtblock-Vorlagen angelegt.</span>}
-              </div>
             </div>
 
             {!daten ? (
@@ -832,6 +858,14 @@ export default function PlantafelPage() {
                   onDragStart={(e) => e.preventDefault()}
                 >
                   <thead>
+                    <tr className="kw-zeile">
+                      <th></th>
+                      {wochenBloecke(tage).map((block, i) => (
+                        <th key={i} colSpan={block.anzahl} className="kw-spalte">
+                          KW {block.kw}
+                        </th>
+                      ))}
+                    </tr>
                     <tr>
                       <th>Mitarbeiter</th>
                       {tage.map((t) => {

@@ -145,6 +145,10 @@ body {
 .plantafel th.wochenende, .plantafel td.wochenende { background: var(--mitel-grau-10); }
 .plantafel th.feiertag, .plantafel td.feiertag { background: #fef3c7; }
 .plantafel th.feiertag.wochenende, .plantafel td.feiertag.wochenende { background: #fde68a; }
+/* Kalenderwochen-Kopfzeile: eine Zelle je Woche, ueber deren Tage gespannt (colSpan) -- gilt fuer
+   alle Monatstabellen mit Tagen als Spalten (Plantafel und Team-Uebersicht). */
+.kw-zeile th { background: var(--mitel-grau-10); border-bottom: 1px solid var(--mitel-grau-20); }
+.kw-spalte { font-size: 0.7rem; font-weight: 600; color: var(--mitel-grau); text-align: center; }
 .plantafel.stempel-aktiv .plan-zelle { cursor: crosshair; }
 .plantafel.stempel-aktiv .plan-zelle:hover { outline: 2px solid var(--mitel-mittelblau); outline-offset: -2px; }
 .plantafel.ziehen-aktiv { user-select: none; }
