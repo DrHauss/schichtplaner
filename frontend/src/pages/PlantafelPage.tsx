@@ -192,6 +192,14 @@ export default function PlantafelPage() {
   const dragZellenRef = useRef<Map<string, { peId: number; benutzerId: number; datum: string }>>(new Map());
   const [dragAktiv, setDragAktiv] = useState(false);
   const [, setDragTick] = useState(0);
+  // Ziehen ist bewusst auf die Start-Zeile (Team+Mitarbeiter) beschraenkt -- zusaetzliche Zeilen
+  // beim Ziehen zu erfassen waere selten beabsichtigt und schwer wieder rueckgaengig zu machen.
+  // dragLetzterIndexRef merkt sich den zuletzt erfassten Tages-Index innerhalb der Zeile, damit
+  // beim schnellen Ziehen uebersprungene Zellen (der Browser feuert mouseenter nicht fuer jede
+  // Zelle, wenn die Maus schneller bewegt wird als der Cursor "wandert") nachtraeglich aufgefuellt
+  // werden koennen, statt Luecken in der Auswahl zu lassen.
+  const dragZeileRef = useRef<{ peId: number; benutzerId: number } | null>(null);
+  const dragLetzterIndexRef = useRef<number | null>(null);
 
   async function load() {
     if (einheiten.length === 0) return;
@@ -453,13 +461,26 @@ export default function PlantafelPage() {
       return;
     }
     dragZellenRef.current = new Map();
+    dragZeileRef.current = { peId, benutzerId };
+    dragLetzterIndexRef.current = tage.indexOf(datum);
     setDragAktiv(true);
     zieheZelleHinzu(peId, benutzerId, datum);
   }
 
   function zelleMouseEnter(peId: number, benutzerId: number, datum: string) {
-    if (!dragAktiv) return;
-    zieheZelleHinzu(peId, benutzerId, datum);
+    if (!dragAktiv || !dragZeileRef.current) return;
+    // Nur innerhalb der Start-Zeile erfassen -- ein Ueberfahren anderer Mitarbeiter-/Team-Zeilen
+    // waehrend des Ziehens (z. B. durch eine krumme Mausbewegung) wird ignoriert.
+    if (dragZeileRef.current.peId !== peId || dragZeileRef.current.benutzerId !== benutzerId) return;
+    const neuerIndex = tage.indexOf(datum);
+    if (neuerIndex === -1) return;
+    const letzterIndex = dragLetzterIndexRef.current ?? neuerIndex;
+    const [von, bis] = letzterIndex <= neuerIndex ? [letzterIndex, neuerIndex] : [neuerIndex, letzterIndex];
+    // Luecken auffuellen: der Browser feuert mouseenter nicht zuverlaessig fuer jede einzelne
+    // Zelle, wenn die Maus schnell ueber die schmalen Tages-Spalten gezogen wird -- alle Tage
+    // zwischen der zuletzt erfassten und der aktuellen Spalte werden daher nachtraeglich ergaenzt.
+    for (let i = von; i <= bis; i++) zieheZelleHinzu(peId, benutzerId, tage[i]);
+    dragLetzterIndexRef.current = neuerIndex;
   }
 
   useEffect(() => {
@@ -468,6 +489,8 @@ export default function PlantafelPage() {
       setDragAktiv(false);
       const zellen = Array.from(dragZellenRef.current.values());
       dragZellenRef.current = new Map();
+      dragZeileRef.current = null;
+      dragLetzterIndexRef.current = null;
       setDragTick((t) => t + 1);
       if (zellen.length === 0 || !werkzeug) return;
       if (werkzeug.art === "schichtart") batchZuweisen(zellen, werkzeug.schichtart.id);
