@@ -174,6 +174,21 @@ export default function TeamUebersichtPage() {
     return Array.from(nachKuerzel.values()).sort((a, b) => a.bezeichnung.localeCompare(b.bezeichnung, "de"));
   }, [einheiten]);
 
+  // Die Bereitschaften-Zeilen zeigen aus Platzgruenden nur Initialen (siehe initialen()) --
+  // welche Bereitschaftsart eine Zeile ist, steht bereits als Zeilenbeschriftung in der Tabelle
+  // selbst, muss also nicht zusaetzlich in der Legende wiederholt werden. Was die Legende
+  // stattdessen aufloesen muss, sind die Initialen selbst (mehrdeutig ohne Tooltip/Hover, das im
+  // PDF-Export ohnehin nicht funktioniert).
+  const bereitschaftInitialenListe = useMemo(() => {
+    const nachBenutzer = new Map<number, { benutzerId: number; name: string; initialen: string }>();
+    for (const b of bereitschaften) {
+      if (!nachBenutzer.has(b.benutzerId)) {
+        nachBenutzer.set(b.benutzerId, { benutzerId: b.benutzerId, name: b.mitarbeiterName, initialen: initialen(b.mitarbeiterName) });
+      }
+    }
+    return Array.from(nachBenutzer.values()).sort((a, b) => a.name.localeCompare(b.name, "de"));
+  }, [bereitschaften]);
+
   // Echter PDF-Export statt Browser-Druckdialog: der Druckdialog fuegt browserseitig immer eine
   // eigene Kopf-/Fusszeile mit URL/Titel ein, die sich per CSS nicht unterdruecken laesst. jsPDF +
   // jspdf-autotable erzeugen stattdessen ein eigenstaendiges PDF ohne Browser-Chrome, mit fuer
@@ -183,6 +198,17 @@ export default function TeamUebersichtPage() {
   const NAME_SPALTE_MM = 30;
   const TAG_SPALTE_MM = 8;
   const SEITENRAND_MM = 6;
+
+  // Exakt dieselben Farbwerte wie .uebersicht-monat th/td.wochenende/.feiertag in styles.css --
+  // im PDF muessen Wochenenden/Feiertage genauso erkennbar sein wie in der Bildschirmansicht.
+  function tagTintFarbe(t: string): [number, number, number] | null {
+    const feiertag = feiertagNachDatum.has(t);
+    const wochenende = istWochenende(t);
+    if (feiertag && wochenende) return [253, 230, 138];
+    if (feiertag) return [254, 243, 199];
+    if (wochenende) return [241, 245, 249];
+    return null;
+  }
 
   function pdfExportieren() {
     const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
@@ -219,11 +245,16 @@ export default function TeamUebersichtPage() {
         margin: { left: SEITENRAND_MM, right: SEITENRAND_MM, bottom: 12 },
         theme: "grid",
         styles: { fontSize: 5.5, cellPadding: 0.6, overflow: "linebreak", lineWidth: 0.1, valign: "middle", halign: "center" },
-        headStyles: { fillColor: [30, 41, 59], textColor: [255, 255, 255], fontSize: 5.5, halign: "center" },
+        headStyles: { fillColor: [255, 255, 255], textColor: [30, 41, 59], fontSize: 5.5, halign: "center", fontStyle: "bold" },
         columnStyles: { ...spaltenStile, 0: { ...spaltenStile[0], halign: "left" } },
         rowPageBreak: "avoid",
         didParseCell: (data) => {
-          if (data.section !== "body" || data.column.index === 0) return;
+          if (data.column.index === 0) return;
+          const tint = tagTintFarbe(tage[data.column.index - 1]);
+          if (data.section !== "body") {
+            if (tint) data.cell.styles.fillColor = tint;
+            return;
+          }
           const farbe = farbeNachZelle.get(`${data.row.index}-${data.column.index}`);
           if (farbe) {
             const rgb = hexZuRgb(farbe);
@@ -232,7 +263,12 @@ export default function TeamUebersichtPage() {
               const kontrast = hexZuRgb(kontrastfarbe(farbe));
               if (kontrast) data.cell.styles.textColor = kontrast;
             }
+            return;
           }
+          // Keine Zuweisung/Bereitschaft an diesem Tag -- Wochenend-/Feiertagstoenung bleibt sichtbar,
+          // "frei"-Text (nur in Team-Tabellen gesetzt, s. u.) wird wie im Web dezent grau dargestellt.
+          data.cell.styles.textColor = [148, 163, 184];
+          if (tint) data.cell.styles.fillColor = tint;
         },
       });
       naechsteStartY = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 8;
@@ -259,13 +295,15 @@ export default function TeamUebersichtPage() {
           label: m.name,
           zellen: tage.map((t) => {
             const treffer = pe.zuweisungen.filter((z) => z.benutzerId === m.id && z.datum === t);
-            return { text: treffer.map((z) => z.kuerzel).join("+"), farbe: treffer[0]?.farbe };
+            return treffer.length > 0
+              ? { text: treffer.map((z) => z.kuerzel).join("+"), farbe: treffer[0]?.farbe }
+              : { text: "frei" };
           }),
         }))
       );
     }
 
-    if (schichtartenListe.length > 0 || bereitschaftsartenListe.length > 0) {
+    if (schichtartenListe.length > 0 || bereitschaftInitialenListe.length > 0) {
       if (naechsteStartY > seitenHoehe - 20) {
         doc.addPage();
         naechsteStartY = 12;
@@ -275,22 +313,25 @@ export default function TeamUebersichtPage() {
       naechsteStartY += 5;
       doc.setFontSize(8);
       let x = SEITENRAND_MM;
-      const alleEintraege = [
-        ...schichtartenListe.map((s) => ({ kuerzel: s.kuerzel, bezeichnung: s.bezeichnung, farbe: s.farbe })),
-        ...bereitschaftsartenListe.map((ba) => ({ kuerzel: ba.kuerzel, bezeichnung: ba.bezeichnung, farbe: ba.farbe })),
-      ];
-      for (const e of alleEintraege) {
-        const text = `${e.kuerzel} ${e.bezeichnung}`;
-        const breite = doc.getTextWidth(text) + 10;
+      // Schichtarten mit Farbmuster (Kuerzel steht direkt in den Team-Tabellen), Bereitschaften-
+      // Initialen ohne Farbmuster (welche Bereitschaftsart gemeint ist, steht bereits als
+      // Zeilenbeschriftung -- hier geht es nur um die Aufloesung "wer ist AB/CT/...").
+      const farbEintraege = schichtartenListe.map((s) => ({ text: `${s.kuerzel} ${s.bezeichnung}`, farbe: s.farbe }));
+      const initialenEintraege = bereitschaftInitialenListe.map((b) => ({ text: `${b.initialen} ${b.name}`, farbe: undefined as string | undefined }));
+      for (const e of [...farbEintraege, ...initialenEintraege]) {
+        const platzFuerMuster = e.farbe ? 6 : 0;
+        const breite = doc.getTextWidth(e.text) + platzFuerMuster + 4;
         if (x + breite > doc.internal.pageSize.getWidth() - SEITENRAND_MM) {
           x = SEITENRAND_MM;
           naechsteStartY += 6;
         }
-        const rgb = hexZuRgb(e.farbe) ?? [148, 163, 184];
-        doc.setFillColor(rgb[0], rgb[1], rgb[2]);
-        doc.rect(x, naechsteStartY - 3.2, 4, 4, "F");
+        if (e.farbe) {
+          const rgb = hexZuRgb(e.farbe) ?? [148, 163, 184];
+          doc.setFillColor(rgb[0], rgb[1], rgb[2]);
+          doc.rect(x, naechsteStartY - 3.2, 4, 4, "F");
+        }
         doc.setTextColor(30, 41, 59);
-        doc.text(text, x + 6, naechsteStartY);
+        doc.text(e.text, x + platzFuerMuster, naechsteStartY);
         x += breite;
       }
     }
@@ -449,7 +490,7 @@ export default function TeamUebersichtPage() {
           );
         })}
 
-      {!loading && (schichtartenListe.length > 0 || bereitschaftsartenListe.length > 0) && (
+      {!loading && (schichtartenListe.length > 0 || bereitschaftInitialenListe.length > 0) && (
         <section>
           <h2>Legende</h2>
           <div className="uebersicht-legende">
@@ -461,12 +502,14 @@ export default function TeamUebersichtPage() {
                 {s.bezeichnung}
               </span>
             ))}
-            {bereitschaftsartenListe.map((ba) => (
-              <span key={`b${ba.id}`} className="uebersicht-legende-eintrag">
-                <span className="badge" style={{ background: ba.farbe, color: kontrastfarbe(ba.farbe) }}>
-                  {ba.kuerzel}
-                </span>
-                {ba.bezeichnung}
+            {/* Welche Bereitschaftsart eine Zeile ist, steht schon als Zeilenbeschriftung in der
+                Bereitschaften-Tabelle -- hier werden stattdessen die dort verwendeten Initialen
+                (siehe initialen()) auf volle Namen aufgeloest, da diese ohne Tooltip/Hover (bzw.
+                im PDF-Export) sonst mehrdeutig blieben. */}
+            {bereitschaftInitialenListe.map((b) => (
+              <span key={`b${b.benutzerId}`} className="uebersicht-legende-eintrag">
+                <span className="uebersicht-legende-initialen">{b.initialen}</span>
+                {b.name}
               </span>
             ))}
           </div>
