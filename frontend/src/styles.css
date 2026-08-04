@@ -215,11 +215,20 @@ body {
 .uebersicht-monat th.feiertag.wochenende, .uebersicht-monat td.feiertag.wochenende { background: #fde68a; }
 .uebersicht-monat .badge { font-size: 0.68rem; padding: 0.05rem 0.25rem; }
 .uebersicht-monat .freischicht-hinweis { font-size: 0.68rem; }
-.uebersicht-legende { display: flex; flex-wrap: wrap; gap: 0.6rem 1.2rem; }
-.uebersicht-legende-eintrag { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; }
+.uebersicht-legende-gruppe + .uebersicht-legende-gruppe { margin-top: 0.4rem; }
+.uebersicht-legende-gruppe h3 { margin: 0 0 0.25rem; font-size: 0.78rem; font-weight: 600; color: #475569; }
+/* flex-wrap statt fester Grid-Spalten: eine feste Mindestspaltenbreite passt entweder nicht zu
+   kurzen Eintraegen (Platzverschwendung) oder bricht laengere Bezeichnungen/Kuerzel mitten im Wort
+   um. white-space: nowrap auf jedem Eintrag verhindert das Umbrechen einzelner Eintraege; nur
+   ganze Eintraege wandern bei Platzmangel in die naechste Zeile. */
+.uebersicht-legende { display: flex; flex-wrap: wrap; gap: 0.25rem 0.9rem; }
+.uebersicht-legende-eintrag { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.78rem; line-height: 1.2; white-space: nowrap; }
+.uebersicht-legende-eintrag .badge { padding: 0.05rem 0.3rem; font-size: 0.68rem; white-space: nowrap; }
 .uebersicht-legende-initialen {
-  display: inline-block; padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.8rem;
-  background: #e2e8f0; color: #475569; font-weight: 600;
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+  min-width: 1.4rem; height: 1.1rem; padding: 0 0.25rem; border-radius: 999px;
+  background: #e2e8f0; color: #475569; font-weight: 700; font-size: 0.64rem;
+  border: 1px solid #cbd5e1;
 }
 
 /* Rasteransicht (Jahresabfrage) */
