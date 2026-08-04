@@ -77,6 +77,7 @@ interface Planungseinheit {
   id: number;
   name: string;
   standort: string | null;
+  mitarbeiter_anzahl: number;
 }
 
 interface Mitgliedschaft {
@@ -159,7 +160,7 @@ function SchichtartenSektion() {
   const [bezeichnung, setBezeichnung] = useState("");
   const [beginn, setBeginn] = useState("06:00");
   const [ende, setEnde] = useState("14:00");
-  const [farbe, setFarbe] = useState("#3b82f6");
+  const [farbe, setFarbe] = useState("#0073d0"); // Mitel Mittelblau als Vorschlagsfarbe fuer neue Schichtarten
   const [kategorie, setKategorie] = useState<"dienst" | "abwesenheit">("dienst");
   const [ganztags, setGanztags] = useState(false);
   const [pauseMin, setPauseMin] = useState(0);
@@ -478,7 +479,7 @@ function BereitschaftsartenSektion() {
   const [bereitschaftsarten, setBereitschaftsarten] = useState<Bereitschaftsart[]>([]);
   const [kuerzel, setKuerzel] = useState("");
   const [bezeichnung, setBezeichnung] = useState("");
-  const [farbe, setFarbe] = useState("#a855f7");
+  const [farbe, setFarbe] = useState("#812cc4"); // Mitel Lila als Vorschlagsfarbe fuer neue Bereitschaftsarten
   const [editId, setEditId] = useState<number | null>(null);
   const [editForm, setEditForm] = useState<Bereitschaftsart | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -642,6 +643,20 @@ function PlanungseinheitenSektion({ alleEinheiten, onGeaendert }: { alleEinheite
     }
   }
 
+  // Der Server lehnt das Loeschen nicht-leerer Teams ohnehin ab (409) -- die clientseitige Sperre
+  // des Buttons ist nur eine fruehe, verstaendlichere Rueckmeldung statt eines Fehlertexts.
+  async function loeschen(p: Planungseinheit) {
+    if (p.mitarbeiter_anzahl > 0) return;
+    if (!confirm(`Team "${p.name}" wirklich löschen?`)) return;
+    setError(null);
+    try {
+      await api(`/planungseinheiten/${p.id}`, { method: "DELETE" });
+      onGeaendert();
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  }
+
   return (
     <section>
       <h2>Planungseinheiten (Administration)</h2>
@@ -662,6 +677,8 @@ function PlanungseinheitenSektion({ alleEinheiten, onGeaendert }: { alleEinheite
           <tr>
             <th>Name</th>
             <th>Standort</th>
+            <th>Mitarbeiter</th>
+            <th></th>
           </tr>
         </thead>
         <tbody>
@@ -669,11 +686,22 @@ function PlanungseinheitenSektion({ alleEinheiten, onGeaendert }: { alleEinheite
             <tr key={p.id}>
               <td>{p.name}</td>
               <td>{p.standort ?? "–"}</td>
+              <td>{p.mitarbeiter_anzahl}</td>
+              <td>
+                <button
+                  type="button"
+                  onClick={() => loeschen(p)}
+                  disabled={p.mitarbeiter_anzahl > 0}
+                  title={p.mitarbeiter_anzahl > 0 ? "Nur leere Teams können gelöscht werden" : "Team löschen"}
+                >
+                  Löschen
+                </button>
+              </td>
             </tr>
           ))}
           {alleEinheiten.length === 0 && (
             <tr>
-              <td colSpan={2} className="empty">
+              <td colSpan={4} className="empty">
                 Noch keine Planungseinheit angelegt.
               </td>
             </tr>

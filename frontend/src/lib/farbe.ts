@@ -21,5 +21,5 @@ export function kontrastfarbe(hexFarbe: string | undefined | null): string {
   if (!rgb) return "#ffffff";
   const [r, g, b] = rgb;
   const wahrgenommeneHelligkeit = (r * 299 + g * 587 + b * 114) / 1000;
-  return wahrgenommeneHelligkeit >= 150 ? "#1e293b" : "#ffffff";
+  return wahrgenommeneHelligkeit >= 150 ? "#15325f" : "#ffffff";
 }
