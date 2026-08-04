@@ -215,11 +215,17 @@ body {
 .uebersicht-monat th.feiertag.wochenende, .uebersicht-monat td.feiertag.wochenende { background: #fde68a; }
 .uebersicht-monat .badge { font-size: 0.68rem; padding: 0.05rem 0.25rem; }
 .uebersicht-monat .freischicht-hinweis { font-size: 0.68rem; }
-.uebersicht-legende { display: flex; flex-wrap: wrap; gap: 0.6rem 1.2rem; }
+.uebersicht-legende-gruppe + .uebersicht-legende-gruppe { margin-top: 0.7rem; }
+.uebersicht-legende-gruppe h3 { margin: 0 0 0.4rem; font-size: 0.85rem; font-weight: 600; color: #475569; }
+/* Grid statt flex-wrap: die Eintraege bleiben so untereinander ausgerichtet statt ragged
+   umzubrechen, wodurch die Legende insgesamt kompakter wirkt. */
+.uebersicht-legende { display: grid; grid-template-columns: repeat(auto-fill, minmax(11rem, 1fr)); gap: 0.35rem 1rem; }
 .uebersicht-legende-eintrag { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; }
 .uebersicht-legende-initialen {
-  display: inline-block; padding: 0.15rem 0.4rem; border-radius: 4px; font-size: 0.8rem;
-  background: #e2e8f0; color: #475569; font-weight: 600;
+  display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0;
+  min-width: 1.7rem; height: 1.35rem; padding: 0 0.3rem; border-radius: 999px;
+  background: #e2e8f0; color: #475569; font-weight: 700; font-size: 0.72rem;
+  border: 1px solid #cbd5e1;
 }
 
 /* Rasteransicht (Jahresabfrage) */

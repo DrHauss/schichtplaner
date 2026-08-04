@@ -303,6 +303,44 @@ export default function TeamUebersichtPage() {
       );
     }
 
+    // Zeichnet eine Legenden-Gruppe (Ueberschrift + Eintraege) als echtes Raster mit fester
+    // Spaltenzahl statt einer ragged Zeilenumbruch-Liste -- dadurch bleiben die Eintraege sauber
+    // untereinander ausgerichtet und die Gruppe nimmt insgesamt weniger Platz ein. Die
+    // Spaltenbreite richtet sich nach dem laengsten Eintrag der jeweiligen Gruppe, sodass kurze
+    // Bereitschafts-Namen dichter gepackt werden als laengere Schichtart-Bezeichnungen.
+    function zeichneLegendeGruppe(
+      titel: string,
+      musterBreite: number,
+      eintraege: { text: string; zeichneMuster: (x: number, y: number) => void }[]
+    ) {
+      if (eintraege.length === 0) return;
+      const maxTextBreite = Math.max(...eintraege.map((e) => doc.getTextWidth(e.text)));
+      const spaltenBreite = musterBreite + maxTextBreite + 6;
+      const nutzbareBreite = doc.internal.pageSize.getWidth() - 2 * SEITENRAND_MM;
+      const spalten = Math.max(1, Math.min(6, Math.floor(nutzbareBreite / spaltenBreite)));
+      const zeilenAnzahl = Math.ceil(eintraege.length / spalten);
+      const benoetigteHoehe = 4.5 + zeilenAnzahl * 5 + 4;
+      if (naechsteStartY + benoetigteHoehe > seitenHoehe - 8) {
+        doc.addPage();
+        naechsteStartY = 12;
+      }
+      doc.setFontSize(9);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(30, 41, 59);
+      doc.text(titel, SEITENRAND_MM, naechsteStartY);
+      doc.setFont("helvetica", "normal");
+      naechsteStartY += 4.5;
+      eintraege.forEach((e, i) => {
+        const x = SEITENRAND_MM + (i % spalten) * spaltenBreite;
+        const y = naechsteStartY + Math.floor(i / spalten) * 5;
+        e.zeichneMuster(x, y);
+        doc.setFontSize(8);
+        doc.setTextColor(30, 41, 59);
+        doc.text(e.text, x + musterBreite, y);
+      });
+      naechsteStartY += zeilenAnzahl * 5 + 4;
+    }
+
     if (schichtartenListe.length > 0 || bereitschaftInitialenListe.length > 0) {
       if (naechsteStartY > seitenHoehe - 20) {
         doc.addPage();
@@ -310,30 +348,38 @@ export default function TeamUebersichtPage() {
       }
       doc.setFontSize(11);
       doc.text("Legende", SEITENRAND_MM, naechsteStartY);
-      naechsteStartY += 5;
-      doc.setFontSize(8);
-      let x = SEITENRAND_MM;
-      // Schichtarten mit Farbmuster (Kuerzel steht direkt in den Team-Tabellen), Bereitschaften-
-      // Initialen ohne Farbmuster (welche Bereitschaftsart gemeint ist, steht bereits als
-      // Zeilenbeschriftung -- hier geht es nur um die Aufloesung "wer ist AB/CT/...").
-      const farbEintraege = schichtartenListe.map((s) => ({ text: `${s.kuerzel} ${s.bezeichnung}`, farbe: s.farbe }));
-      const initialenEintraege = bereitschaftInitialenListe.map((b) => ({ text: `${b.initialen} ${b.name}`, farbe: undefined as string | undefined }));
-      for (const e of [...farbEintraege, ...initialenEintraege]) {
-        const platzFuerMuster = e.farbe ? 6 : 0;
-        const breite = doc.getTextWidth(e.text) + platzFuerMuster + 4;
-        if (x + breite > doc.internal.pageSize.getWidth() - SEITENRAND_MM) {
-          x = SEITENRAND_MM;
-          naechsteStartY += 6;
-        }
-        if (e.farbe) {
-          const rgb = hexZuRgb(e.farbe) ?? [148, 163, 184];
-          doc.setFillColor(rgb[0], rgb[1], rgb[2]);
-          doc.rect(x, naechsteStartY - 3.2, 4, 4, "F");
-        }
-        doc.setTextColor(30, 41, 59);
-        doc.text(e.text, x + platzFuerMuster, naechsteStartY);
-        x += breite;
-      }
+      naechsteStartY += 6;
+
+      zeichneLegendeGruppe(
+        "Schichtarten",
+        6,
+        schichtartenListe.map((s) => ({
+          text: `${s.kuerzel} ${s.bezeichnung}`,
+          zeichneMuster: (x, y) => {
+            const rgb = hexZuRgb(s.farbe) ?? [148, 163, 184];
+            doc.setFillColor(rgb[0], rgb[1], rgb[2]);
+            doc.roundedRect(x, y - 3.2, 4, 4, 0.8, 0.8, "F");
+          },
+        }))
+      );
+
+      // Initialen-Chip statt reinem Text -- optische Entsprechung zum Farbmuster der
+      // Schichtarten-Gruppe, macht die Bereitschafts-Kuerzel selbst als eigenstaendiges,
+      // wiedererkennbares Element sichtbar statt sie nur im Fliesstext mitlaufen zu lassen.
+      zeichneLegendeGruppe(
+        "Bereitschaften",
+        11,
+        bereitschaftInitialenListe.map((b) => ({
+          text: b.name,
+          zeichneMuster: (x, y) => {
+            doc.setFillColor(226, 232, 240);
+            doc.roundedRect(x, y - 3.4, 9, 4.4, 1, 1, "F");
+            doc.setFontSize(6.5);
+            doc.setTextColor(71, 85, 105);
+            doc.text(b.initialen, x + 4.5, y - 0.4, { align: "center" });
+          },
+        }))
+      );
     }
 
     doc.save(`team-uebersicht-${jahr}-${String(monat).padStart(2, "0")}.pdf`);
@@ -493,26 +539,38 @@ export default function TeamUebersichtPage() {
       {!loading && (schichtartenListe.length > 0 || bereitschaftInitialenListe.length > 0) && (
         <section>
           <h2>Legende</h2>
-          <div className="uebersicht-legende">
-            {schichtartenListe.map((s) => (
-              <span key={s.kuerzel} className="uebersicht-legende-eintrag">
-                <span className="badge" style={{ background: s.farbe, color: kontrastfarbe(s.farbe) }}>
-                  {s.kuerzel}
-                </span>
-                {s.bezeichnung}
-              </span>
-            ))}
-            {/* Welche Bereitschaftsart eine Zeile ist, steht schon als Zeilenbeschriftung in der
-                Bereitschaften-Tabelle -- hier werden stattdessen die dort verwendeten Initialen
-                (siehe initialen()) auf volle Namen aufgeloest, da diese ohne Tooltip/Hover (bzw.
-                im PDF-Export) sonst mehrdeutig blieben. */}
-            {bereitschaftInitialenListe.map((b) => (
-              <span key={`b${b.benutzerId}`} className="uebersicht-legende-eintrag">
-                <span className="uebersicht-legende-initialen">{b.initialen}</span>
-                {b.name}
-              </span>
-            ))}
-          </div>
+          {schichtartenListe.length > 0 && (
+            <div className="uebersicht-legende-gruppe">
+              <h3>Schichtarten</h3>
+              <div className="uebersicht-legende">
+                {schichtartenListe.map((s) => (
+                  <span key={s.kuerzel} className="uebersicht-legende-eintrag">
+                    <span className="badge" style={{ background: s.farbe, color: kontrastfarbe(s.farbe) }}>
+                      {s.kuerzel}
+                    </span>
+                    {s.bezeichnung}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+          {/* Welche Bereitschaftsart eine Zeile ist, steht schon als Zeilenbeschriftung in der
+              Bereitschaften-Tabelle -- hier werden stattdessen die dort verwendeten Initialen
+              (siehe initialen()) auf volle Namen aufgeloest, da diese ohne Tooltip/Hover (bzw. im
+              PDF-Export) sonst mehrdeutig blieben. */}
+          {bereitschaftInitialenListe.length > 0 && (
+            <div className="uebersicht-legende-gruppe">
+              <h3>Bereitschaften</h3>
+              <div className="uebersicht-legende">
+                {bereitschaftInitialenListe.map((b) => (
+                  <span key={`b${b.benutzerId}`} className="uebersicht-legende-eintrag">
+                    <span className="uebersicht-legende-initialen">{b.initialen}</span>
+                    {b.name}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
         </section>
       )}
     </div>
