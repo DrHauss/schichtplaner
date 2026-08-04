@@ -184,6 +184,17 @@ export default function TeamUebersichtPage() {
   const TAG_SPALTE_MM = 8;
   const SEITENRAND_MM = 6;
 
+  // Exakt dieselben Farbwerte wie .uebersicht-monat th/td.wochenende/.feiertag in styles.css --
+  // im PDF muessen Wochenenden/Feiertage genauso erkennbar sein wie in der Bildschirmansicht.
+  function tagTintFarbe(t: string): [number, number, number] | null {
+    const feiertag = feiertagNachDatum.has(t);
+    const wochenende = istWochenende(t);
+    if (feiertag && wochenende) return [253, 230, 138];
+    if (feiertag) return [254, 243, 199];
+    if (wochenende) return [241, 245, 249];
+    return null;
+  }
+
   function pdfExportieren() {
     const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
     const seitenHoehe = doc.internal.pageSize.getHeight();
@@ -219,11 +230,16 @@ export default function TeamUebersichtPage() {
         margin: { left: SEITENRAND_MM, right: SEITENRAND_MM, bottom: 12 },
         theme: "grid",
         styles: { fontSize: 5.5, cellPadding: 0.6, overflow: "linebreak", lineWidth: 0.1, valign: "middle", halign: "center" },
-        headStyles: { fillColor: [30, 41, 59], textColor: [255, 255, 255], fontSize: 5.5, halign: "center" },
+        headStyles: { fillColor: [255, 255, 255], textColor: [30, 41, 59], fontSize: 5.5, halign: "center", fontStyle: "bold" },
         columnStyles: { ...spaltenStile, 0: { ...spaltenStile[0], halign: "left" } },
         rowPageBreak: "avoid",
         didParseCell: (data) => {
-          if (data.section !== "body" || data.column.index === 0) return;
+          if (data.column.index === 0) return;
+          const tint = tagTintFarbe(tage[data.column.index - 1]);
+          if (data.section !== "body") {
+            if (tint) data.cell.styles.fillColor = tint;
+            return;
+          }
           const farbe = farbeNachZelle.get(`${data.row.index}-${data.column.index}`);
           if (farbe) {
             const rgb = hexZuRgb(farbe);
@@ -232,7 +248,12 @@ export default function TeamUebersichtPage() {
               const kontrast = hexZuRgb(kontrastfarbe(farbe));
               if (kontrast) data.cell.styles.textColor = kontrast;
             }
+            return;
           }
+          // Keine Zuweisung/Bereitschaft an diesem Tag -- Wochenend-/Feiertagstoenung bleibt sichtbar,
+          // "frei"-Text (nur in Team-Tabellen gesetzt, s. u.) wird wie im Web dezent grau dargestellt.
+          data.cell.styles.textColor = [148, 163, 184];
+          if (tint) data.cell.styles.fillColor = tint;
         },
       });
       naechsteStartY = (doc as unknown as { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 8;
@@ -259,7 +280,9 @@ export default function TeamUebersichtPage() {
           label: m.name,
           zellen: tage.map((t) => {
             const treffer = pe.zuweisungen.filter((z) => z.benutzerId === m.id && z.datum === t);
-            return { text: treffer.map((z) => z.kuerzel).join("+"), farbe: treffer[0]?.farbe };
+            return treffer.length > 0
+              ? { text: treffer.map((z) => z.kuerzel).join("+"), farbe: treffer[0]?.farbe }
+              : { text: "frei" };
           }),
         }))
       );
