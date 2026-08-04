@@ -916,7 +916,7 @@ export default function PlantafelPage() {
                     {tage.map((t) => {
                       const soll = r.ziele[wochentagZielSchluessel(t)];
                       const ist = r.istProTag[t] ?? 0;
-                      const klassen = ["plan-zelle"];
+                      const klassen = ["plan-zelle", istWochenende(t) ? "wochenende" : "", feiertage.has(t) ? "feiertag" : ""].filter(Boolean);
                       if (ist < soll) klassen.push("besetzung-unter");
                       else if (ist > soll && r.warntBeiUeberbesetzung) klassen.push("besetzung-ueber");
                       return (

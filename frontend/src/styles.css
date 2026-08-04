@@ -101,7 +101,7 @@ body {
 .toolbar { display: flex; gap: 0.75rem; align-items: center; margin-bottom: 1rem; flex-wrap: wrap; }
 .toolbar-filter { display: flex; gap: 0.4rem; align-items: center; font-size: 0.9rem; }
 .toolbar-filter:first-of-type { margin-left: auto; }
-.plantafel .plan-zelle { cursor: pointer; text-align: center; min-width: 40px; }
+.plantafel .plan-zelle { cursor: pointer; }
 .zelle-ausgeblendet { color: var(--mitel-grau-20); font-size: 0.8rem; }
 .zeile { display: flex; gap: 0.5rem; }
 .inline-label { display: flex; gap: 0.5rem; align-items: center; margin-bottom: 1rem; }
@@ -138,8 +138,14 @@ body {
 .palette .hint { flex-basis: 100%; }
 
 .plantafel-scroll { overflow-x: auto; }
-.plantafel th, .plantafel td { text-align: center; }
-.plantafel th:first-child, .plantafel td:first-child { text-align: left; min-width: 9rem; }
+/* table-layout: fixed mit expliziten (nicht nur Mindest-)Breiten sorgt dafuer, dass die
+   Tages-Spalten in JEDER Plantafel-Tabelle auf der Seite (Mindestbesetzung-Uebersicht, jedes
+   Team) exakt gleich breit sind -- unabhaengig vom Inhalt der jeweiligen Tabelle, der sonst je
+   Tabelle zu unterschiedlichen, "springenden" Spaltenbreiten fuehrt (gleiches Prinzip wie bei
+   .uebersicht-monat in der Team-Uebersicht). */
+.plantafel { table-layout: fixed; width: auto; }
+.plantafel th, .plantafel td { text-align: center; width: 3.4rem; }
+.plantafel th:first-child, .plantafel td:first-child { text-align: left; width: 9rem; }
 .plantafel .tag-nr { font-weight: 600; line-height: 1.1; }
 .plantafel .tag-wt { font-weight: 400; color: var(--mitel-grau); font-size: 0.75rem; line-height: 1.1; }
 .plantafel th.wochenende, .plantafel td.wochenende { background: var(--mitel-grau-10); }
