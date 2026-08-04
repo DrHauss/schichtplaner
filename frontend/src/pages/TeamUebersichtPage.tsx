@@ -89,6 +89,32 @@ function istWochenende(datumIso: string): boolean {
   return tag === 0 || tag === 6;
 }
 
+// ISO-8601-Kalenderwoche (Woche mit dem ersten Donnerstag des Jahres ist KW 1, Woche beginnt
+// montags) -- Standardalgorithmus ueber den naechstgelegenen Donnerstag der Woche.
+function kalenderwoche(datumIso: string): number {
+  const datum = new Date(`${datumIso}T00:00:00`);
+  const montagBasiert = (datum.getDay() + 6) % 7;
+  datum.setDate(datum.getDate() - montagBasiert + 3);
+  const ersterDonnerstag = new Date(datum.getFullYear(), 0, 4);
+  const ersterMontagBasiert = (ersterDonnerstag.getDay() + 6) % 7;
+  ersterDonnerstag.setDate(ersterDonnerstag.getDate() - ersterMontagBasiert + 3);
+  return 1 + Math.round((datum.getTime() - ersterDonnerstag.getTime()) / (7 * 24 * 60 * 60 * 1000));
+}
+
+// Fasst aufeinanderfolgende Tage derselben Kalenderwoche zu einem Block zusammen, damit die
+// Kopfzeile die KW-Nummer ueber die gesamte Woche gespannt (colSpan) anzeigen kann -- am Monatsrand
+// ist ein Block oft kuerzer als 7 Tage, da nur die tatsaechlich angezeigten Tage gezaehlt werden.
+function wochenBloecke(tage: string[]): { kw: number; anzahl: number }[] {
+  const bloecke: { kw: number; anzahl: number }[] = [];
+  for (const t of tage) {
+    const kw = kalenderwoche(t);
+    const letzter = bloecke[bloecke.length - 1];
+    if (letzter && letzter.kw === kw) letzter.anzahl++;
+    else bloecke.push({ kw, anzahl: 1 });
+  }
+  return bloecke;
+}
+
 // Vorname- + Nachname-Initiale (z. B. "Anna Beispiel" -> "AB") -- kompakt genug, um wie ein
 // normales Schicht-Kuerzel in die feste Spaltenbreite zu passen, aber anders als eine reine
 // Anzahl direkt erkennbar, wer gemeint ist.
@@ -424,6 +450,14 @@ export default function TeamUebersichtPage() {
           <div className="uebersicht-monat-scroll">
             <table className="table uebersicht-monat">
               <thead>
+                <tr className="kw-zeile">
+                  <th></th>
+                  {wochenBloecke(tage).map((block, i) => (
+                    <th key={i} colSpan={block.anzahl} className="kw-spalte">
+                      KW {block.kw}
+                    </th>
+                  ))}
+                </tr>
                 <tr>
                   <th>Bereitschaft</th>
                   {tage.map((t) => (
@@ -482,6 +516,14 @@ export default function TeamUebersichtPage() {
                 <div className="uebersicht-monat-scroll">
                   <table className="table uebersicht-monat">
                     <thead>
+                      <tr className="kw-zeile">
+                        <th></th>
+                        {wochenBloecke(tage).map((block, i) => (
+                          <th key={i} colSpan={block.anzahl} className="kw-spalte">
+                            KW {block.kw}
+                          </th>
+                        ))}
+                      </tr>
                       <tr>
                         <th>Mitarbeiter</th>
                         {tage.map((t) => (
