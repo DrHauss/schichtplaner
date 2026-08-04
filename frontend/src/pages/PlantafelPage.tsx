@@ -236,6 +236,13 @@ export default function PlantafelPage() {
   const [bereitschaftsarten, setBereitschaftsarten] = useState<Bereitschaftsart[]>([]);
   const [feiertage, setFeiertage] = useState<Set<string>>(new Set());
   const [werkzeug, setWerkzeug] = useState<Werkzeug | null>(null);
+  // Steuert, was beim manuellen Zuweisen eines Diensts/einer Abwesenheit passiert, wenn die Zelle
+  // bereits eine Zuweisung hat: "hinzufuegen" (bisheriges Verhalten) fragt bei einer Doppelbelegung
+  // nach und legt bei Bestaetigung eine zweite Zuweisung zusaetzlich an (Konfliktdarstellung);
+  // "ueberschreiben" entfernt die vorhandene(n) Zuweisung(en) der Zelle vorher automatisch, sodass
+  // keine Doppelbelegung entsteht. Ruhezeit-Konflikte mit Nachbartagen bleiben davon unberuehrt und
+  // durchlaufen weiterhin die normale Rueckfrage.
+  const [zuweisungsModus, setZuweisungsModus] = useState<"hinzufuegen" | "ueberschreiben">("hinzufuegen");
   const [detailId, setDetailId] = useState<number | null>(null);
   const [freischichtDetail, setFreischichtDetail] = useState<{ peId: number; benutzerId: number; datum: string } | null>(null);
   // Radierer auf einer oder mehreren markierten Zellen: enthaelt die Markierung mehr als eine
@@ -356,11 +363,23 @@ export default function PlantafelPage() {
     load();
   }
 
+  // Im Ueberschreiben-Modus wird vor einer neuen Dienst-/Abwesenheits-Zuweisung die bereits
+  // vorhandene der Zelle entfernt, damit daraus keine Doppelbelegung entsteht -- Bereitschaften
+  // bleiben davon unberuehrt (die sind bewusst zusaetzlich zu einer Schicht moeglich). Im
+  // Hinzufuegen-Modus (Default) passiert hier nichts, die bisherige Rueckfrage bei Konflikten greift.
+  async function vorhandeneZuweisungEntfernenFallsUeberschreiben(peId: number, benutzerId: number, datum: string) {
+    if (zuweisungsModus !== "ueberschreiben") return;
+    for (const z of zellenZuweisungen(peId, benutzerId, datum)) {
+      await api(`/zuweisungen/${z.id}?kommentareBehalten=1&planungseinheitId=${peId}`, { method: "DELETE" });
+    }
+  }
+
   async function zelleKlick(peId: number, benutzerId: number, datum: string) {
     if (!werkzeug || busy) return;
     setBusy(true);
     try {
       if (werkzeug.art === "schichtart") {
+        await vorhandeneZuweisungEntfernenFallsUeberschreiben(peId, benutzerId, datum);
         await postMitKonfliktabfrage("/zuweisungen", {
           benutzerId,
           schichtartId: werkzeug.schichtart.id,
@@ -393,6 +412,7 @@ export default function PlantafelPage() {
     const konflikte: { peId: number; benutzerId: number; datum: string; text: string }[] = [];
     for (const z of zellen) {
       try {
+        await vorhandeneZuweisungEntfernenFallsUeberschreiben(z.peId, z.benutzerId, z.datum);
         await api("/zuweisungen", {
           method: "POST",
           body: JSON.stringify({ benutzerId: z.benutzerId, schichtartId, datum: z.datum, planungseinheitId: z.peId }),
@@ -849,6 +869,26 @@ export default function PlantafelPage() {
           {alleVorlagen.length === 0 && <span className="empty">Keine Schichtblock-Vorlagen angelegt.</span>}
         </div>
 
+        <div className="palette-gruppe">
+          <span className="palette-label">Modus</span>
+          <button
+            type="button"
+            className={`palette-item${zuweisungsModus === "hinzufuegen" ? " aktiv" : ""}`}
+            title="Trifft eine neue Zuweisung auf eine bereits vorhandene, wird bei Bestätigung eine zweite zusätzlich angelegt."
+            onClick={() => setZuweisungsModus("hinzufuegen")}
+          >
+            Hinzufügen
+          </button>
+          <button
+            type="button"
+            className={`palette-item${zuweisungsModus === "ueberschreiben" ? " aktiv" : ""}`}
+            title="Eine bereits vorhandene Zuweisung der Zelle wird vor dem Zuweisen automatisch entfernt."
+            onClick={() => setZuweisungsModus("ueberschreiben")}
+          >
+            Überschreiben
+          </button>
+        </div>
+
         <div className="palette-gruppe palette-werkzeuge">
           <button
             type="button"
@@ -865,7 +905,11 @@ export default function PlantafelPage() {
 
         <span className="hint">
           {werkzeug?.art === "schichtart" &&
-            `„${werkzeug.schichtart.bezeichnung}" ausgewählt – Zellen anklicken oder durch Ziehen mehrere Tage auf einmal zuweisen.`}
+            `„${werkzeug.schichtart.bezeichnung}" ausgewählt – Zellen anklicken oder durch Ziehen mehrere Tage auf einmal zuweisen. ${
+              zuweisungsModus === "ueberschreiben"
+                ? "Eine vorhandene Zuweisung der Zelle wird dabei ersetzt."
+                : "Bei einer bereits vorhandenen Zuweisung wird nachgefragt."
+            }`}
           {werkzeug?.art === "bereitschaft" &&
             `„${werkzeug.bereitschaftsart.bezeichnung}" ausgewählt – Zellen anklicken oder durch Ziehen mehrere Tage auf einmal zuweisen (zusätzlich zu einer eventuell vorhandenen Schicht).`}
           {werkzeug?.art === "vorlage" &&
