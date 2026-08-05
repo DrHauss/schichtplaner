@@ -14,7 +14,13 @@ import { uebersichtRouter } from "./routes/uebersicht";
 import { pruefeFristenUndErinnerungen } from "./lib/scheduler";
 
 const app = express();
-app.use(cors());
+// CORS_ORIGIN (kommagetrennt) schraenkt im Produktivbetrieb ein, von welchen Origins aus die API
+// per Browser angesprochen werden darf. Ungesetzt bleibt es wie bisher offen (Dev-Komfort, da
+// Frontend/Backend dort ueblicherweise auf unterschiedlichen Ports laufen).
+const erlaubteOrigins = process.env.CORS_ORIGIN?.split(",")
+  .map((o) => o.trim())
+  .filter(Boolean);
+app.use(cors(erlaubteOrigins && erlaubteOrigins.length > 0 ? { origin: erlaubteOrigins } : undefined));
 app.use(express.json());
 
 app.get("/api/health", (_req, res) => res.json({ status: "ok" }));
