@@ -7,7 +7,9 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
-    "seed": "tsx src/lib/seed.ts"
+    "seed": "tsx src/lib/seed.ts",
+    "create-admin": "node dist/lib/create-admin.js",
+    "backup": "node dist/lib/backup.js"
   },
   "dependencies": {
     "better-sqlite3": "^11.3.0",

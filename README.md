@@ -59,6 +59,59 @@ npm run dev    # SPA auf http://localhost:5173 (Proxy auf /api -> Backend)
 | Planer | planer@schichtweb.de | planer123 |
 | Mitarbeiter | anna@schichtweb.de / ben@schichtweb.de / clara@schichtweb.de | test1234 |
 
+## Produktivbetrieb mit Docker Compose
+
+Voraussetzung: Docker (mit Compose-Plugin) auf dem Zielserver. Das Setup baut zwei Images:
+
+- `backend` – Node/Express-API, kompiliert im Build-Schritt (`node:20-bookworm-slim`, damit die
+  nativen `better-sqlite3`-Bindings glibc-kompatibel sind), läuft im Runtime-Image ohne
+  Compiler-Werkzeuge. Die SQLite-Datenbank liegt in einem benannten Docker-Volume (`schichtweb-data`)
+  unter `/app/data` und übersteht damit Neustarts/Deploys.
+- `frontend` – statischer Vite-Produktionsbuild, ausgeliefert über nginx; `nginx.conf` leitet
+  `/api/*` intern an den `backend`-Dienst weiter und liefert für alle anderen Pfade `index.html`
+  aus (SPA-Routing).
+
+```bash
+cp .env.example .env
+# JWT_SECRET setzen -- z. B.:
+sed -i "s/^JWT_SECRET=$/JWT_SECRET=$(openssl rand -hex 32)/" .env
+# Optional: CORS_ORIGIN auf die tatsächliche Frontend-Domain setzen, HTTP_PORT anpassen.
+
+docker compose up -d --build
+```
+
+Das Frontend ist danach unter `http://<server>:${HTTP_PORT:-80}/` erreichbar (dahinter i. d. R.
+noch ein Reverse Proxy mit TLS-Terminierung, z. B. nginx/Caddy/Traefik auf dem Host).
+
+`npm run seed` legt bewusst nur Demo-/Testdaten mit öffentlich bekannten Passwörtern an und ist
+**nicht** für den Produktivbetrieb gedacht. Stattdessen den ersten echten Administrator anlegen:
+
+```bash
+docker compose exec backend node dist/lib/create-admin.js admin@firma.de "Max Mustermann" "ein-starkes-passwort"
+```
+
+Weitere Planungseinheiten, Mitarbeiter und Schichtarten lassen sich danach über die Oberfläche
+(Stammdaten, als Administrator angemeldet) anlegen.
+
+### Backup
+
+Die SQLite-Datei ist die einzige Datenhaltung der Anwendung. Eine konsistente Kopie (auch bei
+laufendem Betrieb, WAL-sicher) erzeugt:
+
+```bash
+docker compose exec backend node dist/lib/backup.js
+```
+
+Die Kopie landet als `backup-<Zeitstempel>.sqlite` im selben Datenvolume und sollte anschließend
+an einen anderen Ort kopiert werden, z. B.:
+
+```bash
+docker compose cp backend:/app/data/backup-2026-08-05T12-00-00-000Z.sqlite ./
+```
+
+Für regelmäßige Backups einen Cronjob auf dem Host einrichten, der beide Befehle nacheinander
+ausführt.
+
 ## Datenmodell
 
 Die SQLite-Tabellen in `backend/src/lib/db.ts` setzen das vereinfachte Datenmodell aus Konzept-Kapitel 5 direkt um (`mitarbeiter` → `benutzer`, `schicht_zuweisung`, `ausschreibung`, `schichtblock`, `blockschicht`, `bewerbung`, `vergabe_protokoll`, `benachrichtigung` usw.). Die Jahresabfrage erweitert `ausschreibung`/`bewerbung` um wenige Spalten (`typ`, `zeitraum_von/bis`, `antwort`, …) statt neue Kernobjekte einzuführen und ergänzt `terminserie` sowie `abfrage_teilnehmer`.
