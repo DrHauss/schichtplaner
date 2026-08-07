@@ -13,10 +13,16 @@ export function requireAuth(req: AuthedRequest, res: Response, next: NextFunctio
   }
   try {
     req.user = verifyToken(header.slice("Bearer ".length));
-    next();
   } catch {
     return res.status(401).json({ error: "Ungueltiges Token" });
   }
+  // Deaktivierung/Loeschung wirkt sofort, auch bei einem noch gueltigen Token (bis zu 12h Laufzeit) --
+  // ohne diese Pruefung koennte ein deaktiviertes Konto bis zum Token-Ablauf weiterarbeiten.
+  const konto = db.prepare("SELECT aktiv FROM benutzer WHERE id = ?").get(req.user.sub) as { aktiv: number } | undefined;
+  if (!konto || !konto.aktiv) {
+    return res.status(401).json({ error: "Konto ist deaktiviert oder existiert nicht mehr" });
+  }
+  next();
 }
 
 // Prueft, ob der angemeldete Nutzer Planer (oder Admin) in der Planungseinheit ist

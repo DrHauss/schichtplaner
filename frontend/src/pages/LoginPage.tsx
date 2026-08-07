@@ -5,8 +5,11 @@ import { useAuth } from "../auth/AuthContext";
 export default function LoginPage() {
   const { user, login } = useAuth();
   const navigate = useNavigate();
-  const [email, setEmail] = useState("planer@schichtweb.de");
-  const [passwort, setPasswort] = useState("planer123");
+  // Vorbelegung mit Demo-Zugangsdaten nur im Entwicklungs-Build (npm run dev) -- der Produktivbuild
+  // (import.meta.env.PROD, wird z. B. im Docker-Image ueber "vite build" erzeugt) zeigt weder eine
+  // Vorbelegung noch den Hinweistext darunter an.
+  const [email, setEmail] = useState(import.meta.env.PROD ? "" : "planer@schichtweb.de");
+  const [passwort, setPasswort] = useState(import.meta.env.PROD ? "" : "planer123");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -43,9 +46,11 @@ export default function LoginPage() {
         <button type="submit" disabled={busy}>
           {busy ? "Anmelden…" : "Anmelden"}
         </button>
-        <p className="hint">
-          Demo-Zugänge: admin@schichtweb.de / admin123 · planer@schichtweb.de / planer123 · anna@schichtweb.de / test1234
-        </p>
+        {!import.meta.env.PROD && (
+          <p className="hint">
+            Demo-Zugänge: admin@schichtweb.de / admin123 · planer@schichtweb.de / planer123 · anna@schichtweb.de / test1234
+          </p>
+        )}
       </form>
     </div>
   );

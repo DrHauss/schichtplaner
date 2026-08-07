@@ -11,6 +11,9 @@ authRouter.post("/login", (req, res) => {
   if (!user || !verifyPassword(passwort, user.passwort_hash)) {
     return res.status(401).json({ error: "Login fehlgeschlagen" });
   }
+  if (!user.aktiv) {
+    return res.status(401).json({ error: "Konto ist deaktiviert" });
+  }
   const token = signToken({ sub: user.id, email: user.email, istAdmin: !!user.ist_admin });
   const mitgliedschaften = db
     .prepare(
