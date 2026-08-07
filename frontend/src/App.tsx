@@ -3,6 +3,7 @@ import { useAuth } from "./auth/AuthContext";
 import Layout from "./components/Layout";
 import LoginPage from "./pages/LoginPage";
 import MeinPlanPage from "./pages/MeinPlanPage";
+import MeinKontoPage from "./pages/MeinKontoPage";
 import SchichtboersePage from "./pages/SchichtboersePage";
 import AusschreibungDetailPage from "./pages/AusschreibungDetailPage";
 import JahresabfragePage from "./pages/JahresabfragePage";
@@ -33,6 +34,7 @@ export default function App() {
       >
         <Route index element={<Navigate to="/mein-plan" replace />} />
         <Route path="mein-plan" element={<MeinPlanPage />} />
+        <Route path="mein-konto" element={<MeinKontoPage />} />
         <Route path="team-uebersicht" element={<TeamUebersichtPage />} />
         <Route path="schichtboerse" element={<SchichtboersePage />} />
         <Route path="schichtboerse/ausschreibung/:id" element={<AusschreibungDetailPage />} />

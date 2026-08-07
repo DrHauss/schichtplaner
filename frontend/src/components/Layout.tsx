@@ -17,7 +17,7 @@ export default function Layout() {
           {istPlaner && <NavLink to="/stammdaten">Stammdaten</NavLink>}
         </nav>
         <div className="user-info">
-          <span>{user?.name}</span>
+          <NavLink to="/mein-konto">{user?.name}</NavLink>
           <button onClick={logout}>Abmelden</button>
         </div>
       </header>

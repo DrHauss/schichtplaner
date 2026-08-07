@@ -42,6 +42,8 @@ body {
 .topbar nav a { color: var(--mitel-grau-35); text-decoration: none; padding: 0.25rem 0.5rem; border-radius: 4px; }
 .topbar nav a.active, .topbar nav a:hover { color: white; background: var(--mitel-mittelblau); }
 .user-info { display: flex; align-items: center; gap: 0.5rem; }
+.user-info a { color: white; text-decoration: none; padding: 0.25rem 0.5rem; border-radius: 4px; }
+.user-info a:hover { background: var(--mitel-mittelblau); }
 .user-info button { background: transparent; border: 1px solid var(--mitel-grau); color: white; padding: 0.3rem 0.6rem; border-radius: 4px; cursor: pointer; }
 
 .content { padding: 1.5rem; flex: 1; }
