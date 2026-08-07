@@ -371,6 +371,11 @@ ensureColumn("schichtart", "ganztags", "INTEGER NOT NULL DEFAULT 0");
 // Jahresarbeitszeit ueber die Arbeitstage des Jahres (siehe lib/feiertage.ts).
 ensureColumn("benutzer", "soll_stunden_taeglich", "REAL");
 
+// Deaktivierte Konten koennen sich nicht mehr einloggen (weder neu noch mit einem noch gueltigen
+// Token, siehe requireAuth in middleware/auth.ts) -- fuer ausgeschiedene Mitarbeiter, ohne den
+// Account samt Historie (Zuweisungen, Vergaben, ...) loeschen zu muessen.
+ensureColumn("benutzer", "aktiv", "INTEGER NOT NULL DEFAULT 1");
+
 // Archivierte Schichtarten bleiben in bestehenden Zuweisungen/der Planung sichtbar (Historie),
 // koennen aber nicht mehr neu zugewiesen werden (weder einzeln noch ueber eine Vorlage, die sie
 // enthaelt) -- siehe Sperre in routes/plantafel.ts.

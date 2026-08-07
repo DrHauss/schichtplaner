@@ -117,6 +117,7 @@ interface Benutzer {
   wochenstunden: number;
   soll_stunden_taeglich: number | null;
   ist_admin: number;
+  aktiv: number;
   mitgliedschaften: Mitgliedschaft[];
 }
 
@@ -170,7 +171,7 @@ export default function StammdatenPage() {
       {einheitenOptionen.length > 0 && <FeiertageSektion />}
 
       {istAdmin && <PlanungseinheitenSektion alleEinheiten={alleEinheiten} onGeaendert={() => api<Planungseinheit[]>("/planungseinheiten").then(setAlleEinheiten)} />}
-      {istAdmin && <BenutzerverwaltungSektion alleEinheiten={alleEinheiten} />}
+      {istAdmin && <BenutzerverwaltungSektion alleEinheiten={alleEinheiten} eigeneBenutzerId={user!.id} />}
     </div>
   );
 }
@@ -1060,7 +1061,13 @@ function FeiertageSektion() {
   );
 }
 
-function BenutzerverwaltungSektion({ alleEinheiten }: { alleEinheiten: Planungseinheit[] }) {
+function BenutzerverwaltungSektion({
+  alleEinheiten,
+  eigeneBenutzerId,
+}: {
+  alleEinheiten: Planungseinheit[];
+  eigeneBenutzerId: number;
+}) {
   const [benutzer, setBenutzer] = useState<Benutzer[]>([]);
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -1068,6 +1075,11 @@ function BenutzerverwaltungSektion({ alleEinheiten }: { alleEinheiten: Planungse
   const [sollStundenTaeglich, setSollStundenTaeglich] = useState<number | "">("");
   const [neuesPasswort, setNeuesPasswort] = useState<{ email: string; passwort: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const [passwortBenutzerId, setPasswortBenutzerId] = useState<number | null>(null);
+  const [passwortEingabe, setPasswortEingabe] = useState("");
+  const [passwortFehler, setPasswortFehler] = useState<string | null>(null);
+  const [passwortGesetztFuer, setPasswortGesetztFuer] = useState<number | null>(null);
 
   const [zuweisenBenutzerId, setZuweisenBenutzerId] = useState<number | null>(null);
   const [zuweisenPeId, setZuweisenPeId] = useState<number | null>(null);
@@ -1088,6 +1100,25 @@ function BenutzerverwaltungSektion({ alleEinheiten }: { alleEinheiten: Planungse
   async function sollStundenAendern(benutzerId: number, wert: number | "") {
     await api(`/benutzer/${benutzerId}`, { method: "PUT", body: JSON.stringify({ sollStundenTaeglich: wert === "" ? null : wert }) });
     laden();
+  }
+
+  async function aktivAendern(benutzerId: number, aktiv: boolean) {
+    await api(`/benutzer/${benutzerId}`, { method: "PUT", body: JSON.stringify({ aktiv }) });
+    laden();
+  }
+
+  async function passwortSetzen(e: FormEvent) {
+    e.preventDefault();
+    if (!passwortBenutzerId) return;
+    setPasswortFehler(null);
+    try {
+      await api(`/benutzer/${passwortBenutzerId}/passwort`, { method: "PUT", body: JSON.stringify({ passwort: passwortEingabe }) });
+      setPasswortGesetztFuer(passwortBenutzerId);
+      setPasswortBenutzerId(null);
+      setPasswortEingabe("");
+    } catch (err) {
+      setPasswortFehler((err as Error).message);
+    }
   }
 
   async function anlegen(e: FormEvent) {
@@ -1219,6 +1250,8 @@ function BenutzerverwaltungSektion({ alleEinheiten }: { alleEinheiten: Planungse
             <th>Soll-Std./Tag</th>
             <th>Jahresarbeitszeit {jahr}</th>
             <th>Rollen</th>
+            <th>Aktiv</th>
+            <th>Passwort</th>
           </tr>
         </thead>
         <tbody>
@@ -1257,6 +1290,59 @@ function BenutzerverwaltungSektion({ alleEinheiten }: { alleEinheiten: Planungse
                   </span>
                 ))}
                 {b.mitgliedschaften.length === 0 && <span className="empty">keine</span>}
+              </td>
+              <td>
+                <input
+                  type="checkbox"
+                  checked={!!b.aktiv}
+                  disabled={b.id === eigeneBenutzerId}
+                  title={b.id === eigeneBenutzerId ? "Das eigene Konto kann nicht deaktiviert werden" : "Kann sich einloggen"}
+                  onChange={(e) => aktivAendern(b.id, e.target.checked)}
+                />
+              </td>
+              <td>
+                {passwortBenutzerId === b.id ? (
+                  <form
+                    className="form-inline"
+                    style={{ display: "inline-flex" }}
+                    onSubmit={passwortSetzen}
+                  >
+                    <input
+                      type="password"
+                      autoFocus
+                      value={passwortEingabe}
+                      onChange={(e) => setPasswortEingabe(e.target.value)}
+                      placeholder="neues Passwort"
+                      minLength={8}
+                      required
+                    />
+                    <button type="submit">Setzen</button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPasswortBenutzerId(null);
+                        setPasswortEingabe("");
+                        setPasswortFehler(null);
+                      }}
+                    >
+                      Abbrechen
+                    </button>
+                  </form>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPasswortBenutzerId(b.id);
+                      setPasswortEingabe("");
+                      setPasswortFehler(null);
+                      setPasswortGesetztFuer(null);
+                    }}
+                  >
+                    Passwort setzen
+                  </button>
+                )}
+                {passwortGesetztFuer === b.id && <div className="hint">Neues Passwort gesetzt.</div>}
+                {passwortBenutzerId === b.id && passwortFehler && <div className="error">{passwortFehler}</div>}
               </td>
             </tr>
           ))}

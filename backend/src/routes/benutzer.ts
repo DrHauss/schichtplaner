@@ -21,7 +21,7 @@ function requireAdmin(req: AuthedRequest, res: any): boolean {
 benutzerRouter.get("/", (req: AuthedRequest, res) => {
   if (!requireAdmin(req, res)) return;
   const benutzer = db
-    .prepare("SELECT id, email, name, personalnr, wochenstunden, soll_stunden_taeglich, ist_admin FROM benutzer ORDER BY name")
+    .prepare("SELECT id, email, name, personalnr, wochenstunden, soll_stunden_taeglich, ist_admin, aktiv FROM benutzer ORDER BY name")
     .all() as any[];
   const mitStatus = benutzer.map((b) => {
     const mitgliedschaften = db
@@ -51,19 +51,48 @@ benutzerRouter.post("/", (req: AuthedRequest, res) => {
 
 benutzerRouter.put("/:id", (req: AuthedRequest, res) => {
   if (!requireAdmin(req, res)) return;
-  const { name, personalnr, wochenstunden, sollStundenTaeglich, istAdmin } = req.body ?? {};
+  const body: Record<string, unknown> = req.body ?? {};
+  const benutzerId = Number(req.params.id);
+  const bestehend = db.prepare("SELECT id FROM benutzer WHERE id = ?").get(benutzerId);
+  if (!bestehend) return res.status(404).json({ error: "Benutzer nicht gefunden" });
+
+  if ("aktiv" in body && !body.aktiv && benutzerId === req.user!.sub) {
+    return res.status(400).json({ error: "Das eigene Konto kann nicht deaktiviert werden" });
+  }
+  if ("istAdmin" in body && !body.istAdmin && benutzerId === req.user!.sub) {
+    return res.status(400).json({ error: "Der eigene Administrator-Status kann nicht entfernt werden" });
+  }
+
+  // Echtes Partial-Update: nur tatsaechlich mitgesendete Felder aendern. Ein Aufruf, der z. B. nur
+  // "aktiv" setzt (siehe Frontend-Toggle), darf weder Soll-Stunden/Personalnummer loeschen noch --
+  // sicherheitsrelevant -- den Admin-Status unbeabsichtigt auf 0 zuruecksetzen, weil er im Body fehlt.
+  const felder: Record<string, unknown> = {};
+  if ("name" in body) felder.name = body.name;
+  if ("personalnr" in body) felder.personalnr = body.personalnr || null;
+  if ("wochenstunden" in body) felder.wochenstunden = body.wochenstunden;
+  if ("sollStundenTaeglich" in body) {
+    felder.soll_stunden_taeglich = body.sollStundenTaeglich === "" || body.sollStundenTaeglich == null ? null : body.sollStundenTaeglich;
+  }
+  if ("istAdmin" in body) felder.ist_admin = body.istAdmin ? 1 : 0;
+  if ("aktiv" in body) felder.aktiv = body.aktiv ? 1 : 0;
+
+  if (Object.keys(felder).length > 0) {
+    const setClause = Object.keys(felder)
+      .map((spalte) => `${spalte} = ?`)
+      .join(", ");
+    db.prepare(`UPDATE benutzer SET ${setClause} WHERE id = ?`).run(...Object.values(felder), benutzerId);
+  }
+  res.json({ ok: true });
+});
+
+benutzerRouter.put("/:id/passwort", (req: AuthedRequest, res) => {
+  if (!requireAdmin(req, res)) return;
+  const { passwort } = req.body ?? {};
+  if (!passwort || String(passwort).length < 8) {
+    return res.status(400).json({ error: "Passwort muss mindestens 8 Zeichen haben" });
+  }
   const bestehend = db.prepare("SELECT id FROM benutzer WHERE id = ?").get(req.params.id);
   if (!bestehend) return res.status(404).json({ error: "Benutzer nicht gefunden" });
-  db.prepare(
-    `UPDATE benutzer SET name = COALESCE(?, name), personalnr = ?, wochenstunden = COALESCE(?, wochenstunden),
-     soll_stunden_taeglich = ?, ist_admin = ? WHERE id = ?`
-  ).run(
-    name ?? null,
-    personalnr ?? null,
-    wochenstunden ?? null,
-    sollStundenTaeglich === "" || sollStundenTaeglich == null ? null : sollStundenTaeglich,
-    istAdmin ? 1 : 0,
-    req.params.id
-  );
+  db.prepare("UPDATE benutzer SET passwort_hash = ? WHERE id = ?").run(hashPassword(String(passwort)), req.params.id);
   res.json({ ok: true });
 });
