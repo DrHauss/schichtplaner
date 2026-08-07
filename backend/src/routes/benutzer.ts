@@ -67,7 +67,18 @@ benutzerRouter.put("/:id", (req: AuthedRequest, res) => {
   // "aktiv" setzt (siehe Frontend-Toggle), darf weder Soll-Stunden/Personalnummer loeschen noch --
   // sicherheitsrelevant -- den Admin-Status unbeabsichtigt auf 0 zuruecksetzen, weil er im Body fehlt.
   const felder: Record<string, unknown> = {};
-  if ("name" in body) felder.name = body.name;
+  if ("name" in body) {
+    const neuerName = String(body.name ?? "").trim();
+    if (!neuerName) return res.status(400).json({ error: "Name darf nicht leer sein" });
+    felder.name = neuerName;
+  }
+  if ("email" in body) {
+    const neueEmail = String(body.email ?? "").trim();
+    if (!neueEmail) return res.status(400).json({ error: "E-Mail darf nicht leer sein" });
+    const belegt = db.prepare("SELECT id FROM benutzer WHERE email = ? AND id != ?").get(neueEmail, benutzerId);
+    if (belegt) return res.status(409).json({ error: "E-Mail wird bereits von einem anderen Konto verwendet" });
+    felder.email = neueEmail;
+  }
   if ("personalnr" in body) felder.personalnr = body.personalnr || null;
   if ("wochenstunden" in body) felder.wochenstunden = body.wochenstunden;
   if ("sollStundenTaeglich" in body) {

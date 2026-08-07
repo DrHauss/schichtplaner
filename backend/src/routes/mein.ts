@@ -1,9 +1,33 @@
 import { Router } from "express";
 import { db } from "../lib/db";
 import { requireAuth, AuthedRequest } from "../middleware/auth";
+import { hashPassword, verifyPassword } from "../lib/auth";
 
 export const meinRouter = Router();
 meinRouter.use(requireAuth);
+
+// Selbstbedienung: jeder angemeldete Benutzer kann sein eigenes Passwort aendern (im Unterschied
+// zu PUT /benutzer/:id/passwort, das nur Administratoren fuer beliebige Konten nutzen koennen und
+// das aktuelle Passwort nicht kennen muss). Das aktuelle Passwort wird hier bewusst zusaetzlich
+// geprueft, damit ein kurzzeitig unbeaufsichtigtes, eingeloggtes Geraet nicht ausreicht, um jemand
+// anderen dauerhaft auszusperren.
+meinRouter.put("/passwort", (req: AuthedRequest, res) => {
+  const { aktuellesPasswort, neuesPasswort } = req.body ?? {};
+  if (!aktuellesPasswort || !neuesPasswort) {
+    return res.status(400).json({ error: "aktuellesPasswort und neuesPasswort erforderlich" });
+  }
+  if (String(neuesPasswort).length < 8) {
+    return res.status(400).json({ error: "Neues Passwort muss mindestens 8 Zeichen haben" });
+  }
+  const benutzer = db.prepare("SELECT passwort_hash FROM benutzer WHERE id = ?").get(req.user!.sub) as
+    | { passwort_hash: string }
+    | undefined;
+  if (!benutzer || !verifyPassword(String(aktuellesPasswort), benutzer.passwort_hash)) {
+    return res.status(401).json({ error: "Aktuelles Passwort ist falsch" });
+  }
+  db.prepare("UPDATE benutzer SET passwort_hash = ? WHERE id = ?").run(hashPassword(String(neuesPasswort)), req.user!.sub);
+  res.json({ ok: true });
+});
 
 meinRouter.get("/plan", (req: AuthedRequest, res) => {
   const { von, bis } = req.query as { von?: string; bis?: string };
