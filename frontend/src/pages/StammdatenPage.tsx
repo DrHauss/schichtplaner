@@ -1081,6 +1081,11 @@ function BenutzerverwaltungSektion({
   const [passwortFehler, setPasswortFehler] = useState<string | null>(null);
   const [passwortGesetztFuer, setPasswortGesetztFuer] = useState<number | null>(null);
 
+  const [editId, setEditId] = useState<number | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editEmail, setEditEmail] = useState("");
+  const [editFehler, setEditFehler] = useState<string | null>(null);
+
   const [zuweisenBenutzerId, setZuweisenBenutzerId] = useState<number | null>(null);
   const [zuweisenPeId, setZuweisenPeId] = useState<number | null>(null);
   const [zuweisenRolle, setZuweisenRolle] = useState("mitarbeiter");
@@ -1105,6 +1110,30 @@ function BenutzerverwaltungSektion({
   async function aktivAendern(benutzerId: number, aktiv: boolean) {
     await api(`/benutzer/${benutzerId}`, { method: "PUT", body: JSON.stringify({ aktiv }) });
     laden();
+  }
+
+  function bearbeitenStart(b: Benutzer) {
+    setEditId(b.id);
+    setEditName(b.name);
+    setEditEmail(b.email);
+    setEditFehler(null);
+  }
+
+  function bearbeitenAbbrechen() {
+    setEditId(null);
+    setEditFehler(null);
+  }
+
+  async function bearbeitenSpeichern() {
+    if (editId == null) return;
+    setEditFehler(null);
+    try {
+      await api(`/benutzer/${editId}`, { method: "PUT", body: JSON.stringify({ name: editName, email: editEmail }) });
+      setEditId(null);
+      laden();
+    } catch (err) {
+      setEditFehler((err as Error).message);
+    }
   }
 
   async function passwortSetzen(e: FormEvent) {
@@ -1252,17 +1281,65 @@ function BenutzerverwaltungSektion({
             <th>Rollen</th>
             <th>Aktiv</th>
             <th>Passwort</th>
+            <th></th>
           </tr>
         </thead>
         <tbody>
-          {benutzer.map((b) => (
-            <tr key={b.id}>
-              <td>
-                {b.name}
-                {!!b.ist_admin && <span className="badge-typ"> Admin</span>}
-              </td>
-              <td>{b.email}</td>
-              <td>
+          {benutzer.map((b) =>
+            editId === b.id ? (
+              <tr key={b.id}>
+                <td>
+                  <input value={editName} onChange={(e) => setEditName(e.target.value)} required />
+                </td>
+                <td>
+                  <input type="email" value={editEmail} onChange={(e) => setEditEmail(e.target.value)} required />
+                </td>
+                <td>
+                  <input
+                    type="number"
+                    min={0}
+                    step={0.5}
+                    defaultValue={b.soll_stunden_taeglich ?? ""}
+                    placeholder="keine"
+                    onBlur={(e) => {
+                      const wert = e.target.value ? Number(e.target.value) : "";
+                      if (wert !== (b.soll_stunden_taeglich ?? "")) sollStundenAendern(b.id, wert);
+                    }}
+                  />
+                </td>
+                <td>
+                  {b.soll_stunden_taeglich != null && arbeitstage
+                    ? `${(b.soll_stunden_taeglich * arbeitstage.arbeitstage).toLocaleString("de-DE", { maximumFractionDigits: 1 })} h`
+                    : "–"}
+                </td>
+                <td>
+                  {b.mitgliedschaften.map((m) => (
+                    <span key={m.id} className="rolle-chip">
+                      {m.planungseinheit_name}: {m.rolle}
+                    </span>
+                  ))}
+                  {b.mitgliedschaften.length === 0 && <span className="empty">keine</span>}
+                </td>
+                <td>
+                  <input type="checkbox" checked={!!b.aktiv} disabled title="Erst speichern, dann aenderbar" />
+                </td>
+                <td>–</td>
+                <td>
+                  <button onClick={bearbeitenSpeichern}>Speichern</button>
+                  <button type="button" onClick={bearbeitenAbbrechen}>
+                    Abbrechen
+                  </button>
+                  {editFehler && <div className="error">{editFehler}</div>}
+                </td>
+              </tr>
+            ) : (
+              <tr key={b.id}>
+                <td>
+                  {b.name}
+                  {!!b.ist_admin && <span className="badge-typ"> Admin</span>}
+                </td>
+                <td>{b.email}</td>
+                <td>
                 <input
                   type="number"
                   min={0}
@@ -1344,8 +1421,14 @@ function BenutzerverwaltungSektion({
                 {passwortGesetztFuer === b.id && <div className="hint">Neues Passwort gesetzt.</div>}
                 {passwortBenutzerId === b.id && passwortFehler && <div className="error">{passwortFehler}</div>}
               </td>
+              <td>
+                <button type="button" onClick={() => bearbeitenStart(b)}>
+                  Bearbeiten
+                </button>
+              </td>
             </tr>
-          ))}
+            )
+          )}
         </tbody>
       </table>
     </section>
